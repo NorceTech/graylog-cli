@@ -121,7 +121,7 @@ impl StoredConfig {
     pub fn into_runtime(self) -> Result<GraylogConfig, ValidationError> {
         GraylogConfig::new(
             self.graylog.url,
-            SecretString::new(self.graylog.token),
+            SecretString::new(self.graylog.token.into()),
             self.graylog.timeout_seconds,
             self.graylog.verify_tls,
             self.graylog.fields_cache_ttl_seconds,

@@ -11,6 +11,7 @@ use tokio::task;
 use std::future::Future;
 use std::pin::Pin;
 
+use config::{Config, File, FileFormat};
 use serde::{Deserialize, Serialize};
 
 use crate::application::service::ConfigStore;
@@ -48,31 +49,25 @@ impl FileConfigStore {
     async fn load_impl(&self) -> Result<Option<GraylogConfig>, ConfigError> {
         let config_path = Self::config_path_impl()?;
 
-        let contents = match task::spawn_blocking({
-            let config_path = config_path.clone();
-            move || std::fs::read_to_string(&config_path)
+        if !config_path.exists() {
+            return Ok(None);
+        }
+
+        let config_path_clone = config_path.clone();
+        let stored = task::spawn_blocking(move || {
+            Config::builder()
+                .add_source(File::from(config_path_clone).format(FileFormat::Toml))
+                .build()
+                .and_then(|c| c.try_deserialize::<StoredConfig>())
+                .map_err(|error| ConfigError::Deserialization {
+                    message: error.to_string(),
+                })
         })
         .await
         .map_err(|error| ConfigError::StoreUnavailable {
             backend: "filesystem",
             message: format!("failed to join config read task: {error}"),
-        })? {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(ConfigError::Filesystem {
-                    operation: "reading",
-                    path: config_path.display().to_string(),
-                    message: error.to_string(),
-                });
-            }
-        };
-
-        let stored = toml::from_str::<StoredConfig>(&contents).map_err(|error| {
-            ConfigError::Deserialization {
-                message: error.to_string(),
-            }
-        })?;
+        })??;
 
         stored
             .into_runtime()

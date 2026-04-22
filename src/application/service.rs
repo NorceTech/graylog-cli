@@ -182,7 +182,7 @@ impl ApplicationService {
 
         let runtime_config = GraylogConfig::new(
             normalized_url.clone(),
-            SecretString::new(trimmed_token),
+            SecretString::new(trimmed_token.into()),
             DEFAULT_TIMEOUT_SECONDS,
             true,
             DEFAULT_FIELDS_CACHE_TTL_SECONDS,

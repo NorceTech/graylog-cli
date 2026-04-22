@@ -48,7 +48,7 @@ async fn run(
     match command {
         Commands::Auth(args) => {
             let status = service
-                .authenticate(args.url, SecretString::new(args.token))
+                .authenticate(args.url, SecretString::new(args.token.into()))
                 .await?;
             emit_json_success(&status);
         }
