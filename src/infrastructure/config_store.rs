@@ -35,12 +35,26 @@ impl FileConfigStore {
             return Ok(path.join("graylog-cli").join("config.toml"));
         }
 
-        let home = non_empty_env_path("HOME")?.ok_or_else(|| ConfigError::StoreUnavailable {
-            backend: "filesystem",
-            message: "HOME is not set and XDG_CONFIG_HOME is unavailable".to_string(),
-        })?;
+        #[cfg(windows)]
+        {
+            let appdata =
+                non_empty_env_path("APPDATA")?.ok_or_else(|| ConfigError::StoreUnavailable {
+                    backend: "filesystem",
+                    message: "APPDATA is not set and XDG_CONFIG_HOME is unavailable".to_string(),
+                })?;
 
-        Ok(home.join(".config").join("graylog-cli").join("config.toml"))
+            return Ok(appdata.join("graylog-cli").join("config.toml"));
+        }
+
+        #[cfg(not(windows))]
+        {
+            let home = non_empty_env_path("HOME")?.ok_or_else(|| ConfigError::StoreUnavailable {
+                backend: "filesystem",
+                message: "HOME is not set and XDG_CONFIG_HOME is unavailable".to_string(),
+            })?;
+
+            Ok(home.join(".config").join("graylog-cli").join("config.toml"))
+        }
     }
 }
 
