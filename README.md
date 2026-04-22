@@ -23,7 +23,21 @@ chmod +x /usr/local/bin/graylog-cli
 ### Windows (x86_64)
 
 ```powershell
-Invoke-WebRequest -Uri https://github.com/NorceTech/graylog-cli/releases/latest/download/graylog-cli-windows-x86_64.exe -OutFile graylog-cli.exe
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\graylog-cli'
+New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+Invoke-WebRequest `
+    -Uri 'https://github.com/NorceTech/graylog-cli/releases/latest/download/graylog-cli-windows-x86_64.exe' `
+    -OutFile (Join-Path $installDir 'graylog-cli.exe') `
+    -UseBasicParsing
+
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (-not (($userPath -split ';') -contains $installDir)) {
+    [Environment]::SetEnvironmentVariable(
+        'Path',
+        ($userPath.TrimEnd(';') + ';' + $installDir),
+        'User'
+    )
+}
 ```
 
 ## Usage
