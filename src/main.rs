@@ -55,9 +55,6 @@ async fn run(
         Commands::Search(args) => {
             emit_json_success(&service.search(args.to_input()?).await?);
         }
-        Commands::Errors(args) => {
-            emit_json_success(&service.errors(args.to_input()?).await?);
-        }
         Commands::Aggregate(args) => {
             emit_json_success(&service.aggregate(args.to_input()?).await?);
         }

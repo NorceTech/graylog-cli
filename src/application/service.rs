@@ -18,18 +18,16 @@ use crate::domain::error::HttpError;
 use crate::domain::error::ValidationError;
 use crate::domain::models::{
     AggregateCommandInput, AggregateSearchRequest, AggregateSearchResult, AggregateStatus,
-    AuthStatus, CommandMetadata, CommandStatus, ErrorsCommandInput, FieldsResult, FieldsStatus,
-    MessageSearchRequest, MessageSearchResult, MessageSearchStatus, NormalizedRow, PingStatus,
-    SearchCommandInput, SearchGroup, SortDirection, StreamFindStatus, StreamResult, StreamStatus,
-    StreamsResult, StreamsStatus, SystemInfoStatus, SystemResult,
+    AuthStatus, CommandMetadata, CommandStatus, FieldsResult, FieldsStatus, MessageSearchRequest,
+    MessageSearchResult, MessageSearchStatus, NormalizedRow, PingStatus, SearchCommandInput,
+    SearchGroup, SortDirection, StreamFindStatus, StreamResult, StreamStatus, StreamsResult,
+    StreamsStatus, SystemInfoStatus, SystemResult,
 };
 
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
-const DEFAULT_ERRORS_LIMIT: u64 = 100;
 const MAX_STREAM_SEARCH_LIMIT: u64 = 100;
 const DEFAULT_SEARCH_OFFSET: u64 = 0;
 const DEFAULT_SEARCH_SORT: &str = "timestamp";
-const ERRORS_QUERY: &str = "level:<=3";
 
 pub trait ConfigStore: Send + Sync {
     fn config_path(&self) -> Result<PathBuf, ConfigError>;
@@ -248,29 +246,6 @@ impl ApplicationService {
         }
 
         Ok(status)
-    }
-
-    pub async fn errors(&self, input: ErrorsCommandInput) -> Result<MessageSearchStatus, CliError> {
-        self.execute_message_search(
-            "errors",
-            self.build_search_request(
-                SearchCommandInput {
-                    query: ERRORS_QUERY.to_string(),
-                    timerange: input.timerange,
-                    fields: Vec::new(),
-                    limit: input.limit,
-                    offset: None,
-                    sort: None,
-                    sort_direction: None,
-                    group_by: None,
-                    all_pages: false,
-                    all_fields: false,
-                    streams: Vec::new(),
-                },
-                DEFAULT_ERRORS_LIMIT,
-            ),
-        )
-        .await
     }
 
     pub async fn aggregate(

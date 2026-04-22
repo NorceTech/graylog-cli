@@ -43,12 +43,6 @@ pub struct SearchCommandInput {
     pub streams: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ErrorsCommandInput {
-    pub timerange: Option<CommandTimerange>,
-    pub limit: Option<u64>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageSearchStatus {
     pub ok: bool,

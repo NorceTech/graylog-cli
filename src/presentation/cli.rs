@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::domain::error::{CliError, ValidationError};
 use crate::domain::models::{
-    AggregateCommandInput, AggregationType, ErrorsCommandInput, SearchCommandInput, SortDirection,
+    AggregateCommandInput, AggregationType, SearchCommandInput, SortDirection,
 };
 use crate::domain::timerange::{CommandTimerange, TimerangeInput};
 
@@ -30,8 +30,6 @@ pub enum Commands {
     Auth(AuthArgs),
     /// Search Graylog messages.
     Search(SearchArgs),
-    /// Fetch recent errors.
-    Errors(ErrorsArgs),
     /// Run an aggregation query.
     Aggregate(AggregateArgs),
     /// Count messages by log level.
@@ -57,10 +55,6 @@ impl Commands {
         match self {
             Self::Auth(_) | Self::Ping => Ok(()),
             Self::Search(args) => {
-                args.timerange.try_into_timerange()?;
-                Ok(())
-            }
-            Self::Errors(args) => {
                 args.timerange.try_into_timerange()?;
                 Ok(())
             }
@@ -125,23 +119,6 @@ impl SearchArgs {
             all_pages: self.all_pages,
             all_fields: self.all_fields,
             streams: self.stream_id.clone(),
-        })
-    }
-}
-
-#[derive(Debug, Args)]
-pub struct ErrorsArgs {
-    #[command(flatten)]
-    pub timerange: TimerangeArgs,
-    #[arg(long = "limit", value_parser = clap::value_parser!(u64).range(1..=1000))]
-    pub limit: Option<u64>,
-}
-
-impl ErrorsArgs {
-    pub fn to_input(&self) -> Result<ErrorsCommandInput, ValidationError> {
-        Ok(ErrorsCommandInput {
-            timerange: self.timerange.try_into_timerange()?,
-            limit: self.limit,
         })
     }
 }
