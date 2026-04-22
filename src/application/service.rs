@@ -368,17 +368,17 @@ impl ApplicationService {
     }
 
     pub async fn trace(&self, input: TraceCommandInput) -> Result<TraceStatus, CliError> {
-        let field = input.field.trim().to_string();
-        if field.is_empty() {
+        let query = input.query.trim().to_string();
+        if query.is_empty() {
             return Err(CliError::Validation(ValidationError::EmptyField {
-                field: "field",
+                field: "query",
             }));
         }
 
-        let value = input.value.trim().to_string();
-        if value.is_empty() {
+        let group_by = input.group_by.trim().to_string();
+        if group_by.is_empty() {
             return Err(CliError::Validation(ValidationError::EmptyField {
-                field: "value",
+                field: "group_by",
             }));
         }
 
@@ -395,7 +395,7 @@ impl ApplicationService {
         };
 
         let request = MessageSearchRequest {
-            query: format!("{field}:{value}"),
+            query: query.clone(),
             timerange: Some(timerange),
             fields: vec![
                 "message".to_string(),
@@ -420,14 +420,14 @@ impl ApplicationService {
         let client = self.graylog_gateway_with_config(config)?;
         let result = client.search_messages(request).await?;
 
-        let trace_groups = build_trace_groups(&result.messages);
+        let trace_groups = build_trace_groups(&result.messages, &group_by);
         let summary = build_trace_summary(&trace_groups);
 
         Ok(TraceStatus {
             ok: true,
             command: "trace",
-            field,
-            value,
+            query,
+            grouped_by: group_by,
             total_events: result.messages.len(),
             trace_groups,
             summary,
@@ -591,17 +591,18 @@ impl ApplicationService {
     }
 }
 
-fn build_trace_groups(messages: &[NormalizedRow]) -> Vec<TraceGroup> {
+fn build_trace_groups(messages: &[NormalizedRow], group_by: &str) -> Vec<TraceGroup> {
+    let field_key = format!("field: {group_by}");
     let mut groups: BTreeMap<String, Vec<&NormalizedRow>> = BTreeMap::new();
 
     for row in messages {
-        let corr_id = row
-            .get("field: correlationId")
-            .or_else(|| row.get("correlationId"))
+        let group_key = row
+            .get(&field_key)
+            .or_else(|| row.get(group_by))
             .and_then(|value| value.as_str())
             .unwrap_or("unknown")
             .to_string();
-        groups.entry(corr_id).or_default().push(row);
+        groups.entry(group_key).or_default().push(row);
     }
 
     groups

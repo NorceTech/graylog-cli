@@ -268,8 +268,8 @@ pub struct FieldsStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceCommandInput {
-    pub field: String,
-    pub value: String,
+    pub query: String,
+    pub group_by: String,
     pub timerange: Option<CommandTimerange>,
 }
 
@@ -277,8 +277,8 @@ pub struct TraceCommandInput {
 pub struct TraceStatus {
     pub ok: bool,
     pub command: &'static str,
-    pub field: String,
-    pub value: String,
+    pub query: String,
+    pub grouped_by: String,
     pub total_events: usize,
     pub trace_groups: Vec<TraceGroup>,
     pub summary: TraceSummary,

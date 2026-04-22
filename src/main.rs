@@ -70,8 +70,8 @@ async fn run(
             emit_json_success(
                 &service
                     .trace(TraceCommandInput {
-                        field: args.field,
-                        value: args.value,
+                        query: args.query,
+                        group_by: args.group_by,
                         timerange,
                     })
                     .await?,

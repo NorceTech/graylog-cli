@@ -192,31 +192,34 @@ Key fields for debugging:
 
 ### trace
 
-Trace all events matching a field value, grouped by request correlation ID. Produces a structured timeline with noise collapsed and key events highlighted.
+Trace all events matching a query, grouped into a structured timeline with noise collapsed and key events highlighted. Accepts the same Graylog query syntax as `search`.
 
 ```bash
-graylog-cli trace <VALUE> [--field checkoutCorrelationId] [--time-range 2h]
+graylog-cli trace <QUERY> [--group-by correlationId] [--time-range 2h]
 ```
 
 | Flag | Values | Notes |
 |------|--------|-------|
-| `--field` | Any indexed field name | Default: `checkoutCorrelationId`. Use `graylog-cli fields` to discover available fields |
+| `--group-by` | Any indexed field name | Default: `correlationId`. Controls how events are grouped into timeline segments |
 | `--time-range` | `Ns`, `Nm`, `Nh`, `Nd`, `Nw` | Default: `1h`. Mutually exclusive with `--from`/`--to` |
 | `--from` / `--to` | ISO 8601 timestamps | Absolute range. Both required together |
 
 Examples:
 ```bash
-# Trace a checkout order (default field)
-graylog-cli trace omggXmLy --time-range 2h
+# Trace a checkout order
+graylog-cli trace "checkoutCorrelationId:omggXmLy" --time-range 2h
 
-# Trace by individual request correlation ID
-graylog-cli trace fe165125-90da-4fbb-bf53-33d6dac6c038 --field correlationId --time-range 2h
-
-# Trace by merchant
-graylog-cli trace ppg --field merchant --time-range 1h
+# Trace a single request
+graylog-cli trace "correlationId:fe165125-90da-4fbb-bf53-33d6dac6c038" --time-range 2h
 
 # Trace by basket
-graylog-cli trace 140597614 --field BasketId --time-range 4h
+graylog-cli trace "BasketId:140597614" --time-range 4h
+
+# Trace all errors for a merchant, grouped by order
+graylog-cli trace "merchant:ppg AND level:<=3" --group-by checkoutCorrelationId --time-range 1h
+
+# Trace errors for a specific service
+graylog-cli trace "source:qliro-adapter AND level:<=3" --time-range 30m
 ```
 
 The output groups events by `correlationId` (individual request traces) and categorizes each event:
@@ -287,23 +290,20 @@ graylog-cli fields | jq '.fields[] | select(test("correlation|checkout|merchant|
 ### "Trace a specific order through the system"
 
 ```bash
-# Full timeline for a checkout order (default field: checkoutCorrelationId)
-graylog-cli trace omggXmLy --time-range 2h | jq .
+# Full timeline for a checkout order
+graylog-cli trace "checkoutCorrelationId:omggXmLy" --time-range 2h | jq .
 
-# Trace by individual request correlation ID
-graylog-cli trace fe165125-90da-4fbb-bf53-33d6dac6c038 --field correlationId --time-range 2h | jq .
-
-# Wider time range
-graylog-cli trace omggXmLy --time-range 4h | jq .
+# Trace a single request
+graylog-cli trace "correlationId:fe165125-90da-4fbb-bf53-33d6dac6c038" --time-range 2h | jq .
 
 # Just the errors and the summary
-graylog-cli trace omggXmLy --time-range 2h | jq '{total_events, errors: [.trace_groups[].events[] | select(.type == "error")], summary}'
+graylog-cli trace "checkoutCorrelationId:omggXmLy" --time-range 2h | jq '{total_events, errors: [.trace_groups[].events[] | select(.type == "error")], summary}'
 
 # Find all correlation IDs for an order
-graylog-cli trace omggXmLy | jq '[.trace_groups[].correlation_id]'
+graylog-cli trace "checkoutCorrelationId:omggXmLy" | jq '[.trace_groups[].correlation_id]'
 
 # Show only external calls (API interactions)
-graylog-cli trace omggXmLy | jq '[.trace_groups[].events[] | select(.type == "external_call" or .type == "external_call_response")]'
+graylog-cli trace "checkoutCorrelationId:omggXmLy" | jq '[.trace_groups[].events[] | select(.type == "external_call" or .type == "external_call_response")]'
 ```
 
 ### "Show me all logs for X"
