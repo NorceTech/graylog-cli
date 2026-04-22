@@ -135,6 +135,8 @@ This is the standard pattern for error investigation. The key fields are:
 - `correlationId` — use this to trace the request across services
 - `checkoutCorrelationId` - use this to trace requests related to a specific checkout order
 
+**Tip:** Combine `level:<=3` with any other filter using `AND` to narrow results. For example, to trace only errors for a specific order: `"checkoutCorrelationId:ouUnoSPk AND level:<=3"`. This avoids flooding results with info/debug logs when tracing a full order timeline.
+
 ### aggregate
 
 Run an aggregation query.
@@ -236,9 +238,14 @@ Then drill into specific failing orders:
 ```bash
 # Get affected order IDs from errors
 graylog-cli search "level:<=3" --field checkoutCorrelationId --limit 50 --time-range 1h \
-  | jq '[.messages[]."field: checkoutCorrelationId" | select(. != null)] | unique'
+  | jq '[.messages[].checkoutCorrelationId | select(. != null and . != "-")] | unique'
 
-# Get all events for a specific order, grouped by correlation ID
+# Get error-only events for a specific order (combine level filter with order ID)
+graylog-cli search "checkoutCorrelationId:omggXmLy AND level:<=3" \
+  --field message --field source --field timestamp --field level --field ExceptionType \
+  --all-pages --time-range 2h | jq .
+
+# Get ALL events for a specific order, grouped by correlation ID
 graylog-cli search "checkoutCorrelationId:omggXmLy" --all-pages --group-by correlationId \
   --sort-direction asc --time-range 2h | jq .
 ```
@@ -268,7 +275,7 @@ graylog-cli search "checkoutCorrelationId:omggXmLy" --all-pages --group-by corre
 
 # Filter messages for errors within a grouped result
 graylog-cli search "checkoutCorrelationId:omggXmLy" --all-pages --group-by correlationId \
-  --sort-direction asc --time-range 2h | jq '.messages | map(select(."field: level" <= 3))'
+  --sort-direction asc --time-range 2h | jq '.messages | map(select(.level <= 3))'
 
 # Group by a custom field (e.g. BasketId)
 graylog-cli search "BasketId:140597614" --all-pages --group-by correlationId \

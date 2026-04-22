@@ -954,10 +954,18 @@ fn normalize_row(columns: &[String], row: Value) -> Result<NormalizedRow, HttpEr
             .cloned()
             .unwrap_or_else(|| format!("column_{index}"));
         let value = values.get(index).cloned().unwrap_or(Value::Null);
-        normalized.insert(key, value);
+        normalized.insert(strip_field_prefix(&key), value);
     }
 
     Ok(normalized)
+}
+
+/// Graylog returns search result column names with a "field: " prefix
+/// (e.g. "field: message", "field: source"). Strip it for cleaner JSON keys.
+fn strip_field_prefix(key: &str) -> String {
+    key.strip_prefix("field: ")
+        .map(str::to_string)
+        .unwrap_or_else(|| key.to_string())
 }
 
 fn normalize_named_collection(

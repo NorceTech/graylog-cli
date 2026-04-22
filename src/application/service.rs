@@ -614,13 +614,11 @@ fn apply_grouping(mut status: MessageSearchStatus, group_by: &str) -> MessageSea
 }
 
 fn build_search_groups(messages: &[NormalizedRow], group_by: &str) -> Vec<SearchGroup> {
-    let field_key = format!("field: {group_by}");
     let mut groups: BTreeMap<String, Vec<&NormalizedRow>> = BTreeMap::new();
 
     for row in messages {
         let key = row
-            .get(&field_key)
-            .or_else(|| row.get(group_by))
+            .get(group_by)
             .and_then(|value| value.as_str())
             .unwrap_or("unknown")
             .to_string();
@@ -638,16 +636,12 @@ fn build_search_groups(messages: &[NormalizedRow], group_by: &str) -> Vec<Search
 }
 
 fn compute_group_duration(rows: &[&NormalizedRow]) -> Option<u64> {
-    let first_ts = rows.first().and_then(|row| {
-        row.get("field: timestamp")
-            .or_else(|| row.get("timestamp"))
-            .and_then(|value| value.as_str())
-    })?;
-    let last_ts = rows.last().and_then(|row| {
-        row.get("field: timestamp")
-            .or_else(|| row.get("timestamp"))
-            .and_then(|value| value.as_str())
-    })?;
+    let first_ts = rows
+        .first()
+        .and_then(|row| row.get("timestamp").and_then(|value| value.as_str()))?;
+    let last_ts = rows
+        .last()
+        .and_then(|row| row.get("timestamp").and_then(|value| value.as_str()))?;
     let first_millis = parse_timestamp_to_millis(first_ts)?;
     let last_millis = parse_timestamp_to_millis(last_ts)?;
     Some(last_millis.saturating_sub(first_millis))
