@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  verify-main:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: meta
+        run: |
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag points to main history
+        run: |
+          git fetch origin main --depth=1
+          git branch -r --contains "$GITHUB_SHA" | grep -q "origin/main"
+
+  build-linux:
+    runs-on: ubuntu-latest
+    needs: verify-main
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Build Linux binary
+        run: nix build
+
+      - name: Strip Linux binary
+        run: strip result/bin/graylog-cli
+
+      - name: Prepare artifact
+        run: cp result/bin/graylog-cli graylog-cli-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: graylog-cli-linux-x86_64
+          path: graylog-cli-linux-x86_64
+          if-no-files-found: error
+
+  build-mac:
+    runs-on: macos-latest
+    needs: verify-main
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Build macOS binary
+        run: nix build
+
+      - name: Strip macOS binary
+        run: strip -x result/bin/graylog-cli
+
+      - name: Prepare artifact
+        run: cp result/bin/graylog-cli graylog-cli-macos-aarch64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: graylog-cli-macos-aarch64
+          path: graylog-cli-macos-aarch64
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: ubuntu-latest
+    needs: verify-main
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Build Windows binary
+        run: nix build .#graylog-cli-windows
+
+      - name: Strip Windows binary
+        run: nix shell nixpkgs#pkgsCross.mingwW64.stdenv.cc.bintools -c x86_64-w64-mingw32-strip result/bin/graylog-cli.exe
+
+      - name: Prepare artifact
+        run: cp result/bin/graylog-cli.exe graylog-cli-windows-x86_64.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: graylog-cli-windows-x86_64.exe
+          path: graylog-cli-windows-x86_64.exe
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs:
+      - verify-main
+      - build-linux
+      - build-mac
+      - build-windows
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.verify-main.outputs.tag }}
+          files: |
+            dist/graylog-cli-linux-x86_64/graylog-cli-linux-x86_64
+            dist/graylog-cli-macos-aarch64/graylog-cli-macos-aarch64
+            dist/graylog-cli-windows-x86_64.exe/graylog-cli-windows-x86_64.exe

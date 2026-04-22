@@ -34,7 +34,52 @@
           system,
           ...
         }:
+        let
+          pname = "graylog-cli";
+          version = "0.1.0";
+          commonArgs = {
+            inherit pname version;
+            src = self;
+            cargoLock.lockFile = ./Cargo.lock;
+          };
+          nativePackage = pkgs.rustPlatform.buildRustPackage (
+            commonArgs
+            // {
+              buildInputs = lib.optionals pkgs.stdenv.isDarwin [
+                pkgs.libiconv
+              ];
+            }
+          );
+          windowsTarget = "x86_64-pc-windows-gnu";
+          windowsPkgs = pkgs.pkgsCross.mingwW64;
+          windowsToolchain =
+            with inputs.fenix.packages.${system};
+            combine [
+              stable.cargo
+              stable.rustc
+              targets.${windowsTarget}.stable.rust-std
+            ];
+          windowsRustPlatform = windowsPkgs.makeRustPlatform {
+            cargo = windowsToolchain;
+            rustc = windowsToolchain;
+          };
+          windowsPackage = windowsRustPlatform.buildRustPackage (
+            commonArgs
+            // {
+              cargoBuildTarget = windowsTarget;
+              depsBuildBuild = lib.optionals pkgs.stdenv.isDarwin [
+                pkgs.libiconv
+              ];
+              NIX_LDFLAGS = lib.optionalString pkgs.stdenv.isDarwin "-L${pkgs.libiconv}/lib";
+              stdenv = windowsPkgs.stdenv;
+            }
+          );
+        in
         {
+          packages = {
+            default = nativePackage;
+            graylog-cli-windows = windowsPackage;
+          };
           treefmt = {
             programs.nixfmt.enable = true;
             programs.nixfmt.package = pkgs.nixfmt;
