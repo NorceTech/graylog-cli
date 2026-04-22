@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use exn::ResultExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
@@ -29,50 +28,38 @@ const MAX_STREAM_SEARCH_LIMIT: u64 = 100;
 const DEFAULT_SEARCH_OFFSET: u64 = 0;
 const DEFAULT_SEARCH_SORT: &str = "timestamp";
 
+#[async_trait]
 pub trait ConfigStore: Send + Sync {
     fn config_path(&self) -> Result<PathBuf, ConfigError>;
 
-    fn load(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<GraylogConfig>, ConfigError>> + Send + '_>>;
+    async fn load(&self) -> Result<Option<GraylogConfig>, ConfigError>;
 
-    fn save(
-        &self,
-        config: StoredConfig,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ConfigError>> + Send + '_>>;
+    async fn save(&self, config: StoredConfig) -> Result<(), ConfigError>;
 }
 
+#[async_trait]
 pub trait GraylogGateway: Send + Sync {
     fn base_url(&self) -> &str;
 
-    fn ping(&self) -> Pin<Box<dyn Future<Output = Result<(), HttpError>> + Send + '_>>;
+    async fn ping(&self) -> Result<(), HttpError>;
 
-    fn search_messages(
+    async fn search_messages(
         &self,
         request: MessageSearchRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<MessageSearchResult, HttpError>> + Send + '_>>;
+    ) -> Result<MessageSearchResult, HttpError>;
 
-    fn search_aggregate(
+    async fn search_aggregate(
         &self,
         request: AggregateSearchRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<AggregateSearchResult, HttpError>> + Send + '_>>;
+    ) -> Result<AggregateSearchResult, HttpError>;
 
-    fn list_streams(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<StreamsResult, HttpError>> + Send + '_>>;
+    async fn list_streams(&self) -> Result<StreamsResult, HttpError>;
 
-    fn get_stream(
-        &self,
-        stream_id: String,
-    ) -> Pin<Box<dyn Future<Output = Result<StreamResult, HttpError>> + Send + '_>>;
+    async fn get_stream(&self, stream_id: String) -> Result<StreamResult, HttpError>;
 
-    fn system_info(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<SystemResult, HttpError>> + Send + '_>>;
+    async fn system_info(&self) -> Result<SystemResult, HttpError>;
 
-    fn list_fields(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<FieldsResult, HttpError>> + Send + '_>>;
+    async fn list_fields(&self) -> Result<FieldsResult, HttpError>;
 }
 
 pub trait GraylogGatewayFactory: Send + Sync {
@@ -666,6 +653,7 @@ fn parse_timestamp_to_millis(ts: &str) -> Option<u64> {
 struct UnconfiguredConfigStore;
 struct UnconfiguredGraylogGatewayFactory;
 
+#[async_trait]
 impl ConfigStore for UnconfiguredConfigStore {
     fn config_path(&self) -> Result<PathBuf, ConfigError> {
         Err(ConfigError::StoreUnavailable {
@@ -674,26 +662,17 @@ impl ConfigStore for UnconfiguredConfigStore {
         })
     }
 
-    fn load(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<GraylogConfig>, ConfigError>> + Send + '_>> {
-        Box::pin(async {
-            Err(ConfigError::StoreUnavailable {
-                backend: "unconfigured",
-                message: "no config store has been attached to ApplicationService".to_string(),
-            })
+    async fn load(&self) -> Result<Option<GraylogConfig>, ConfigError> {
+        Err(ConfigError::StoreUnavailable {
+            backend: "unconfigured",
+            message: "no config store has been attached to ApplicationService".to_string(),
         })
     }
 
-    fn save(
-        &self,
-        _config: StoredConfig,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ConfigError>> + Send + '_>> {
-        Box::pin(async {
-            Err(ConfigError::StoreUnavailable {
-                backend: "unconfigured",
-                message: "no config store has been attached to ApplicationService".to_string(),
-            })
+    async fn save(&self, _config: StoredConfig) -> Result<(), ConfigError> {
+        Err(ConfigError::StoreUnavailable {
+            backend: "unconfigured",
+            message: "no config store has been attached to ApplicationService".to_string(),
         })
     }
 }

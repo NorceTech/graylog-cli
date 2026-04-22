@@ -6,13 +6,10 @@ use std::os::unix::fs::PermissionsExt;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::task;
-
-use std::future::Future;
-use std::pin::Pin;
-
+use async_trait::async_trait;
 use config::{Config, File, FileFormat};
 use serde::{Deserialize, Serialize};
+use tokio::task;
 
 use crate::application::service::ConfigStore;
 use crate::domain::config::{GraylogConfig, StoredConfig};
@@ -45,8 +42,26 @@ impl FileConfigStore {
 
         Ok(home.join(".config").join("graylog-cli").join("config.toml"))
     }
+}
 
-    async fn load_impl(&self) -> Result<Option<GraylogConfig>, ConfigError> {
+fn non_empty_env_path(name: &'static str) -> Result<Option<PathBuf>, ConfigError> {
+    match env::var_os(name) {
+        Some(value) if value.is_empty() => Err(ConfigError::StoreUnavailable {
+            backend: "filesystem",
+            message: format!("{name} is set but empty"),
+        }),
+        Some(value) => Ok(Some(PathBuf::from(value))),
+        None => Ok(None),
+    }
+}
+
+#[async_trait]
+impl ConfigStore for FileConfigStore {
+    fn config_path(&self) -> Result<PathBuf, ConfigError> {
+        Self::config_path_impl()
+    }
+
+    async fn load(&self) -> Result<Option<GraylogConfig>, ConfigError> {
         let config_path = Self::config_path_impl()?;
 
         if !config_path.exists() {
@@ -77,7 +92,7 @@ impl FileConfigStore {
             })
     }
 
-    async fn save_impl(&self, config: StoredConfig) -> Result<(), ConfigError> {
+    async fn save(&self, config: StoredConfig) -> Result<(), ConfigError> {
         let config_path = Self::config_path_impl()?;
         let serialized = toml::to_string(&config).map_err(|error| ConfigError::Serialization {
             message: error.to_string(),
@@ -89,36 +104,6 @@ impl FileConfigStore {
                 backend: "filesystem",
                 message: format!("failed to join config write task: {error}"),
             })?
-    }
-}
-
-fn non_empty_env_path(name: &'static str) -> Result<Option<PathBuf>, ConfigError> {
-    match env::var_os(name) {
-        Some(value) if value.is_empty() => Err(ConfigError::StoreUnavailable {
-            backend: "filesystem",
-            message: format!("{name} is set but empty"),
-        }),
-        Some(value) => Ok(Some(PathBuf::from(value))),
-        None => Ok(None),
-    }
-}
-
-impl ConfigStore for FileConfigStore {
-    fn config_path(&self) -> Result<PathBuf, ConfigError> {
-        Self::config_path_impl()
-    }
-
-    fn load(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<GraylogConfig>, ConfigError>> + Send + '_>> {
-        Box::pin(async move { self.load_impl().await })
-    }
-
-    fn save(
-        &self,
-        config: StoredConfig,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ConfigError>> + Send + '_>> {
-        Box::pin(async move { self.save_impl(config).await })
     }
 }
 

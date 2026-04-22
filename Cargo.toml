@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-trait = "0.1.89"
 clap = { version = "4.6", features = ["derive"] }
 config = { version = "0.15", features = ["toml"] }
 exn = "0.3"

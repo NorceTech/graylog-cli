@@ -1,8 +1,7 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use reqwest::{Client, Method};
 use secrecy::ExposeSecret;
 use serde_json::{Map, Value, json};
@@ -401,52 +400,44 @@ fn should_use_cardinality_fallback_rows(request: &AggregateSearchRequest) -> boo
     matches!(request.aggregation_type, AggregationType::Cardinality)
 }
 
+#[async_trait]
 impl GraylogGateway for GraylogClient {
     fn base_url(&self) -> &str {
         &self.config.base_url
     }
 
-    fn ping(&self) -> Pin<Box<dyn Future<Output = Result<(), HttpError>> + Send + '_>> {
-        Box::pin(async move { GraylogClient::ping(self).await })
+    async fn ping(&self) -> Result<(), HttpError> {
+        GraylogClient::ping(self).await
     }
 
-    fn search_messages(
+    async fn search_messages(
         &self,
         request: MessageSearchRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<MessageSearchResult, HttpError>> + Send + '_>> {
-        Box::pin(async move { GraylogClient::search_messages(self, &request).await })
+    ) -> Result<MessageSearchResult, HttpError> {
+        GraylogClient::search_messages(self, &request).await
     }
 
-    fn search_aggregate(
+    async fn search_aggregate(
         &self,
         request: AggregateSearchRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<AggregateSearchResult, HttpError>> + Send + '_>> {
-        Box::pin(async move { GraylogClient::search_aggregate(self, &request).await })
+    ) -> Result<AggregateSearchResult, HttpError> {
+        GraylogClient::search_aggregate(self, &request).await
     }
 
-    fn list_streams(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<StreamsResult, HttpError>> + Send + '_>> {
-        Box::pin(async move { GraylogClient::list_streams(self).await })
+    async fn list_streams(&self) -> Result<StreamsResult, HttpError> {
+        GraylogClient::list_streams(self).await
     }
 
-    fn get_stream(
-        &self,
-        stream_id: String,
-    ) -> Pin<Box<dyn Future<Output = Result<StreamResult, HttpError>> + Send + '_>> {
-        Box::pin(async move { GraylogClient::get_stream(self, &stream_id).await })
+    async fn get_stream(&self, stream_id: String) -> Result<StreamResult, HttpError> {
+        GraylogClient::get_stream(self, &stream_id).await
     }
 
-    fn system_info(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<SystemResult, HttpError>> + Send + '_>> {
-        Box::pin(async move { GraylogClient::system_info(self).await })
+    async fn system_info(&self) -> Result<SystemResult, HttpError> {
+        GraylogClient::system_info(self).await
     }
 
-    fn list_fields(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<FieldsResult, HttpError>> + Send + '_>> {
-        Box::pin(async move { GraylogClient::list_fields(self).await })
+    async fn list_fields(&self) -> Result<FieldsResult, HttpError> {
+        GraylogClient::list_fields(self).await
     }
 }
 
