@@ -36,8 +36,6 @@ pub enum Commands {
     Aggregate(AggregateArgs),
     /// Count messages by log level.
     CountByLevel(CountByLevelArgs),
-    /// Trace all events for a checkout order.
-    Trace(TraceArgs),
     /// Work with Graylog streams.
     Streams {
         #[command(subcommand)]
@@ -68,10 +66,6 @@ impl Commands {
             }
             Self::Aggregate(args) => args.validate(),
             Self::CountByLevel(args) => {
-                args.timerange.try_into_timerange()?;
-                Ok(())
-            }
-            Self::Trace(args) => {
                 args.timerange.try_into_timerange()?;
                 Ok(())
             }
@@ -107,6 +101,10 @@ pub struct SearchArgs {
     pub sort: Option<String>,
     #[arg(long = "sort-direction", value_enum)]
     pub sort_direction: Option<SortDirectionArg>,
+    #[arg(long = "group-by")]
+    pub group_by: Option<String>,
+    #[arg(long = "all-pages")]
+    pub all_pages: bool,
     #[arg(long = "stream-id")]
     pub stream_id: Vec<String>,
 }
@@ -121,6 +119,8 @@ impl SearchArgs {
             offset: self.offset,
             sort: self.sort.clone(),
             sort_direction: self.sort_direction.map(Into::into),
+            group_by: self.group_by.clone(),
+            all_pages: self.all_pages,
             streams: self.stream_id.clone(),
         })
     }
@@ -212,15 +212,6 @@ impl CountByLevelArgs {
     }
 }
 
-#[derive(Debug, Args)]
-pub struct TraceArgs {
-    pub query: String,
-    #[arg(long = "group-by", default_value = "correlationId")]
-    pub group_by: String,
-    #[command(flatten)]
-    pub timerange: TimerangeArgs,
-}
-
 #[derive(Debug, Subcommand)]
 pub enum StreamsCommands {
     /// List streams.
@@ -283,6 +274,8 @@ impl StreamSearchArgs {
             offset: None,
             sort: None,
             sort_direction: None,
+            group_by: None,
+            all_pages: false,
             streams: vec![self.stream_id.clone()],
         })
     }

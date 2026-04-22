@@ -89,11 +89,12 @@ Graylog stores `level` as a **numeric** field (0–7):
 
 ### search
 
-Search Graylog messages.
+Search Graylog messages with optional grouping and automatic pagination.
 
 ```bash
 graylog-cli search <QUERY> [--time-range 15m] [--field message] [--field source] \
-  [--limit 50] [--offset 0] [--sort timestamp] [--sort-direction desc] [--stream-id <ID>]
+  [--limit 50] [--offset 0] [--sort timestamp] [--sort-direction desc] [--stream-id <ID>] \
+  [--group-by <FIELD>] [--all-pages]
 ```
 
 | Flag | Values | Notes |
@@ -101,11 +102,17 @@ graylog-cli search <QUERY> [--time-range 15m] [--field message] [--field source]
 | `--time-range` | `Ns`, `Nm`, `Nh`, `Nd`, `Nw` | Relative range. Mutually exclusive with `--from`/`--to` |
 | `--from` / `--to` | ISO 8601 timestamps | Absolute range. Both required together |
 | `--field` | repeatable | Restrict returned fields |
-| `--limit` | 1-1000 | |
-| `--offset` | non-negative integer | Pagination offset |
+| `--limit` | 1-1000 | Per-page limit (ignored when `--all-pages` is set) |
+| `--offset` | non-negative integer | Pagination offset (ignored when `--all-pages` is set) |
 | `--sort` | field name | Default: `timestamp` |
 | `--sort-direction` | `asc`, `desc` | Default: `desc` |
 | `--stream-id` | repeatable | Scope search to specific streams |
+| `--group-by` | any indexed field name | Group results by a field. Adds `grouped_by` and `groups` to output |
+| `--all-pages` | flag (no value) | Fetch all results beyond the 500-per-page API limit |
+
+When `--group-by` is set, the output includes a `groups` array where each group has `key` (field value), `count` (number of messages), and `duration_ms` (time span from first to last message in the group). Use `--sort-direction asc` with `--group-by` for chronological grouping.
+
+When `--all-pages` is set, the CLI automatically paginates through all results. Useful for queries that match more than 500 events.
 
 ### errors
 
@@ -116,6 +123,13 @@ graylog-cli errors [--time-range 1h] [--limit 100]
 ```
 
 Accepts `--time-range` / `--from`/`--to` and `--limit` (1-1000).
+
+**Note:** The `errors` command returns only the default Graylog fields (typically `source`, `timestamp`, `message`). For richer output with specific fields, use `search` with the error query:
+
+```bash
+graylog-cli search "level:<=3" --field message --field source --field timestamp \
+  --field facility --field level --limit 100 --time-range 1h
+```
 
 ### aggregate
 
@@ -180,63 +194,6 @@ graylog-cli fields
 
 Returns every field name that Graylog has indexed across all messages. Use this to discover what fields you can pass to `--field`, use in queries (`field:value`), or aggregate on. No flags required.
 
-Key fields for debugging:
-- `checkoutCorrelationId` — groups all events for a single checkout order
-- `correlationId` — individual request/trace ID
-- `merchant` — merchant identifier (e.g. `ppg`)
-- `environment` — `Production`, `Stage`, etc.
-- `facility` — service/logger category (e.g. `checkout-order`)
-- `level` — numeric log level (0–7)
-- `message` — log message text
-- `Request_Body` / `Response_Body` — full HTTP request/response payloads
-
-### trace
-
-Trace all events matching a query, grouped into a structured timeline with noise collapsed and key events highlighted. Accepts the same Graylog query syntax as `search`.
-
-```bash
-graylog-cli trace <QUERY> [--group-by correlationId] [--time-range 2h]
-```
-
-| Flag | Values | Notes |
-|------|--------|-------|
-| `--group-by` | Any indexed field name | Default: `correlationId`. Controls how events are grouped into timeline segments |
-| `--time-range` | `Ns`, `Nm`, `Nh`, `Nd`, `Nw` | Default: `1h`. Mutually exclusive with `--from`/`--to` |
-| `--from` / `--to` | ISO 8601 timestamps | Absolute range. Both required together |
-
-Examples:
-```bash
-# Trace a checkout order
-graylog-cli trace "checkoutCorrelationId:omggXmLy" --time-range 2h
-
-# Trace a single request
-graylog-cli trace "correlationId:fe165125-90da-4fbb-bf53-33d6dac6c038" --time-range 2h
-
-# Trace by basket
-graylog-cli trace "BasketId:140597614" --time-range 4h
-
-# Trace all errors for a merchant, grouped by order
-graylog-cli trace "merchant:ppg AND level:<=3" --group-by checkoutCorrelationId --time-range 1h
-
-# Trace errors for a specific service
-graylog-cli trace "source:qliro-adapter AND level:<=3" --time-range 30m
-```
-
-The output groups events by `correlationId` (individual request traces) and categorizes each event:
-
-| Event type | What it captures |
-|-----------|-----------------|
-| `error` | Log entries with level ≤ 3 (full message shown) |
-| `warning` | Log entries with level 4 (full message shown) |
-| `external_call` | HTTP requests to external APIs (method + target URL) |
-| `external_call_response` | HTTP responses (status code + duration in ms) |
-| `callback` | Hook/callback invocations (target adapter + path) |
-| `state_change` | Object comparison diffs (field changes detected) |
-| `db_op` | Cosmos DB reads/writes (collapsed to count) |
-| `internal` | Request started/processed logs (collapsed to count) |
-
-Each trace group includes the `correlation_id`, a `trigger` (first request path), `duration_ms`, and the categorized `events` array. A `summary` section provides totals for errors, external calls, and services involved.
-
 ### ping
 
 Check that Graylog is reachable and credentials are valid.
@@ -257,24 +214,27 @@ Quick snapshot of current errors:
 # Recent errors with full context
 graylog-cli errors --time-range 30m --limit 20 | jq .
 
+# Or use search for specific fields
+graylog-cli search "level:<=3" --field message --field source --field timestamp \
+  --field facility --field level --limit 100 --time-range 30m | jq .
+
 # Error distribution by level
 graylog-cli count-by-level --time-range 1h | jq .
 
 # Error distribution by source
 graylog-cli aggregate "level:<=3" --aggregation-type terms --field source --size 20 --time-range 1h | jq .
-
-# Error distribution by merchant
-graylog-cli aggregate "level:<=3" --aggregation-type terms --field merchant --size 20 --time-range 1h | jq .
 ```
 
-Then trace specific failing orders:
+Then drill into specific failing orders:
 
 ```bash
 # Get affected order IDs from errors
-graylog-cli search "level:<=3" --field checkoutCorrelationId --limit 50 --time-range 1h | jq '[.messages[]."field: checkoutCorrelationId" | select(. != null)] | unique'
+graylog-cli search "level:<=3" --field checkoutCorrelationId --limit 50 --time-range 1h \
+  | jq '[.messages[]."field: checkoutCorrelationId" | select(. != null)] | unique'
 
-# Trace one of them
-graylog-cli trace omggXmLy --time-range 2h | jq .
+# Get all events for a specific order, grouped by correlation ID
+graylog-cli search "checkoutCorrelationId:omggXmLy" --all-pages --group-by correlationId \
+  --sort-direction asc --time-range 2h | jq .
 ```
 
 ### "What fields can I query?"
@@ -287,23 +247,30 @@ graylog-cli fields | jq .
 graylog-cli fields | jq '.fields[] | select(test("correlation|checkout|merchant|environment"))'
 ```
 
-### "Trace a specific order through the system"
+### "Trace a request through the system"
+
+Use `search` with `--group-by` to group events by a correlation field, and `--all-pages` to fetch beyond the 500-per-page API limit:
 
 ```bash
-# Full timeline for a checkout order
-graylog-cli trace "checkoutCorrelationId:omggXmLy" --time-range 2h | jq .
+# Full timeline for a checkout order, grouped by correlation ID
+graylog-cli search "checkoutCorrelationId:omggXmLy" --all-pages --group-by correlationId \
+  --sort-direction asc --time-range 2h | jq .
 
-# Trace a single request
-graylog-cli trace "correlationId:fe165125-90da-4fbb-bf53-33d6dac6c038" --time-range 2h | jq .
+# Just the groups overview (key, count, duration)
+graylog-cli search "checkoutCorrelationId:omggXmLy" --all-pages --group-by correlationId \
+  --sort-direction asc --time-range 2h | jq '.groups'
 
-# Just the errors and the summary
-graylog-cli trace "checkoutCorrelationId:omggXmLy" --time-range 2h | jq '{total_events, errors: [.trace_groups[].events[] | select(.type == "error")], summary}'
+# Filter messages for errors within a grouped result
+graylog-cli search "checkoutCorrelationId:omggXmLy" --all-pages --group-by correlationId \
+  --sort-direction asc --time-range 2h | jq '.messages | map(select(."field: level" <= 3))'
 
-# Find all correlation IDs for an order
-graylog-cli trace "checkoutCorrelationId:omggXmLy" | jq '[.trace_groups[].correlation_id]'
+# Group by a custom field (e.g. BasketId)
+graylog-cli search "BasketId:140597614" --all-pages --group-by correlationId \
+  --sort-direction asc --time-range 4h | jq .
 
-# Show only external calls (API interactions)
-graylog-cli trace "checkoutCorrelationId:omggXmLy" | jq '[.trace_groups[].events[] | select(.type == "external_call" or .type == "external_call_response")]'
+# All errors for a merchant, grouped by order
+graylog-cli search "merchant:ppg AND level:<=3" --all-pages --group-by checkoutCorrelationId \
+  --sort-direction asc --time-range 1h | jq .
 ```
 
 ### "Show me all logs for X"
@@ -319,6 +286,10 @@ graylog-cli search "timeout" --stream-id <STREAM_ID> --time-range 15m | jq .
 
 # Specific fields only (smaller output)
 graylog-cli search "payment" --field message --field source --field timestamp --limit 50 | jq .
+
+# Fetch all matching events (beyond 500 limit)
+graylog-cli search "correlationId:fe165125-90da-4fbb-bf53-33d6dac6c038" --all-pages \
+  --sort-direction asc --time-range 2h | jq .
 ```
 
 ### "Is service X healthy?"
@@ -384,6 +355,25 @@ All runtime output is JSON. Key fields:
   "metadata": { "total_results": 420 }
 }
 ```
+
+**Search with `--group-by`** — adds `grouped_by` and `groups` with counts and durations:
+```json
+{
+  "ok": true,
+  "command": "search",
+  "query": "checkoutCorrelationId:omggXmLy",
+  "returned": 2042,
+  "messages": [...],
+  "grouped_by": "correlationId",
+  "groups": [
+    { "key": "abc-123", "count": 15, "duration_ms": 3400 },
+    { "key": "def-456", "count": 2027, "duration_ms": 1200 }
+  ],
+  "metadata": { "total_results": 2042 }
+}
+```
+
+Each group's `duration_ms` is the time span from the first to last message in that group. Use groups for overview, filter `messages` with jq for per-group details.
 
 **Aggregation results** — `rows` array:
 ```json
