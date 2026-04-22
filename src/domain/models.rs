@@ -37,13 +37,10 @@ pub struct SearchCommandInput {
     pub offset: Option<u64>,
     pub sort: Option<String>,
     pub sort_direction: Option<SortDirection>,
+    pub group_by: Option<String>,
+    pub all_pages: bool,
+    pub all_fields: bool,
     pub streams: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ErrorsCommandInput {
-    pub timerange: Option<CommandTimerange>,
-    pub limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,7 +50,19 @@ pub struct MessageSearchStatus {
     pub query: String,
     pub returned: usize,
     pub messages: Vec<NormalizedRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grouped_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<SearchGroup>>,
     pub metadata: JsonObject,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchGroup {
+    pub key: String,
+    pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,71 +273,4 @@ pub struct FieldsStatus {
     pub command: &'static str,
     pub fields: Vec<String>,
     pub total: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TraceCommandInput {
-    pub query: String,
-    pub group_by: String,
-    pub timerange: Option<CommandTimerange>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TraceStatus {
-    pub ok: bool,
-    pub command: &'static str,
-    pub query: String,
-    pub grouped_by: String,
-    pub total_events: usize,
-    pub trace_groups: Vec<TraceGroup>,
-    pub summary: TraceSummary,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TraceGroup {
-    pub correlation_id: String,
-    pub trigger: String,
-    pub duration_ms: Option<u64>,
-    pub events: Vec<TraceEvent>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TraceEvent {
-    #[serde(rename = "type")]
-    pub event_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub level: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub method: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub old: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub new: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_adapter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub count: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TraceSummary {
-    pub total_errors: usize,
-    pub total_external_calls: usize,
-    pub services_involved: Vec<String>,
 }

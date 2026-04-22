@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -8,28 +8,26 @@ use exn::ResultExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 
-use crate::domain::config::{DEFAULT_TIMEOUT_SECONDS, GraylogConfig, StoredConfig, normalize_url};
+use crate::domain::config::{
+    DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, GraylogConfig, StoredConfig,
+    normalize_url,
+};
 use crate::domain::error::CliError;
 use crate::domain::error::ConfigError;
 use crate::domain::error::HttpError;
 use crate::domain::error::ValidationError;
 use crate::domain::models::{
     AggregateCommandInput, AggregateSearchRequest, AggregateSearchResult, AggregateStatus,
-    AuthStatus, CommandMetadata, CommandStatus, ErrorsCommandInput, FieldsResult, FieldsStatus,
-    MessageSearchRequest, MessageSearchResult, MessageSearchStatus, NormalizedRow, PingStatus,
-    SearchCommandInput, SortDirection, StreamFindStatus, StreamResult, StreamStatus, StreamsResult,
-    StreamsStatus, SystemInfoStatus, SystemResult, TraceCommandInput, TraceEvent, TraceGroup,
-    TraceStatus, TraceSummary,
+    AuthStatus, CommandMetadata, CommandStatus, FieldsResult, FieldsStatus, MessageSearchRequest,
+    MessageSearchResult, MessageSearchStatus, NormalizedRow, PingStatus, SearchCommandInput,
+    SearchGroup, SortDirection, StreamFindStatus, StreamResult, StreamStatus, StreamsResult,
+    StreamsStatus, SystemInfoStatus, SystemResult,
 };
 
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
-const DEFAULT_ERRORS_LIMIT: u64 = 100;
 const MAX_STREAM_SEARCH_LIMIT: u64 = 100;
 const DEFAULT_SEARCH_OFFSET: u64 = 0;
 const DEFAULT_SEARCH_SORT: &str = "timestamp";
-const ERRORS_QUERY: &str = "level:<=3";
-const TRACE_DEFAULT_TIME_RANGE: &str = "1h";
-const TRACE_MAX_LIMIT: u64 = 500;
 
 pub trait ConfigStore: Send + Sync {
     fn config_path(&self) -> Result<PathBuf, ConfigError>;
@@ -187,6 +185,7 @@ impl ApplicationService {
             SecretString::new(trimmed_token),
             DEFAULT_TIMEOUT_SECONDS,
             true,
+            DEFAULT_FIELDS_CACHE_TTL_SECONDS,
         )?;
 
         let config_path = self.config_store.config_path().map_err(CliError::from)?;
@@ -203,31 +202,50 @@ impl ApplicationService {
     }
 
     pub async fn search(&self, input: SearchCommandInput) -> Result<MessageSearchStatus, CliError> {
-        self.execute_message_search(
-            "search",
-            self.build_search_request(input, DEFAULT_SEARCH_LIMIT),
-        )
-        .await
-    }
+        let mut input = input;
 
-    pub async fn errors(&self, input: ErrorsCommandInput) -> Result<MessageSearchStatus, CliError> {
-        self.execute_message_search(
-            "errors",
-            self.build_search_request(
-                SearchCommandInput {
-                    query: ERRORS_QUERY.to_string(),
-                    timerange: input.timerange,
-                    fields: Vec::new(),
-                    limit: input.limit,
-                    offset: None,
-                    sort: None,
-                    sort_direction: None,
-                    streams: Vec::new(),
-                },
-                DEFAULT_ERRORS_LIMIT,
-            ),
-        )
-        .await
+        if input.all_fields && input.fields.is_empty() {
+            let config = self
+                .config_store
+                .load()
+                .await?
+                .ok_or(CliError::Config(ConfigError::NotConfigured))?;
+            let config_path = self.config_store.config_path()?;
+            let ttl = config.fields_cache_ttl_seconds;
+
+            let fields =
+                match crate::infrastructure::config_store::read_fields_cache(&config_path, ttl) {
+                    Some(fields) => fields,
+                    None => {
+                        let client = self.graylog_gateway_with_config(config)?;
+                        let result = client.list_fields().await?;
+                        crate::infrastructure::config_store::write_fields_cache(
+                            &config_path,
+                            &result.fields,
+                        )?;
+                        result.fields
+                    }
+                };
+
+            input.fields = fields;
+        }
+
+        let group_by = input.group_by.clone();
+        let mut status = if input.all_pages {
+            self.execute_paginated_search(&input).await?
+        } else {
+            self.execute_message_search(
+                "search",
+                self.build_search_request(input, DEFAULT_SEARCH_LIMIT),
+            )
+            .await?
+        };
+
+        if let Some(group_by) = group_by.as_deref() {
+            status = apply_grouping(status, group_by);
+        }
+
+        Ok(status)
     }
 
     pub async fn aggregate(
@@ -324,6 +342,9 @@ impl ApplicationService {
             offset: Some(DEFAULT_SEARCH_OFFSET),
             sort: Some(DEFAULT_SEARCH_SORT.to_string()),
             sort_direction: Some(SortDirection::Desc),
+            group_by: None,
+            all_pages: false,
+            all_fields: false,
             streams: vec![stream_id],
         })?;
 
@@ -364,73 +385,6 @@ impl ApplicationService {
             command: "ping",
             reachable: true,
             graylog_url,
-        })
-    }
-
-    pub async fn trace(&self, input: TraceCommandInput) -> Result<TraceStatus, CliError> {
-        let query = input.query.trim().to_string();
-        if query.is_empty() {
-            return Err(CliError::Validation(ValidationError::EmptyField {
-                field: "query",
-            }));
-        }
-
-        let group_by = input.group_by.trim().to_string();
-        if group_by.is_empty() {
-            return Err(CliError::Validation(ValidationError::EmptyField {
-                field: "group_by",
-            }));
-        }
-
-        let timerange = match input.timerange {
-            Some(timerange) => timerange,
-            None => crate::domain::timerange::CommandTimerange::from_input(
-                crate::domain::timerange::TimerangeInput {
-                    relative: Some(TRACE_DEFAULT_TIME_RANGE.to_string()),
-                    from: None,
-                    to: None,
-                },
-            )
-            .map_err(CliError::from)?,
-        };
-
-        let request = MessageSearchRequest {
-            query: query.clone(),
-            timerange: Some(timerange),
-            fields: vec![
-                "message".to_string(),
-                "source".to_string(),
-                "timestamp".to_string(),
-                "facility".to_string(),
-                "correlationId".to_string(),
-                "level".to_string(),
-            ],
-            limit: TRACE_MAX_LIMIT,
-            offset: 0,
-            sort: "timestamp".to_string(),
-            sort_direction: SortDirection::Asc,
-            streams: vec![],
-        };
-
-        let config = self
-            .config_store
-            .load()
-            .await?
-            .ok_or(CliError::Config(ConfigError::NotConfigured))?;
-        let client = self.graylog_gateway_with_config(config)?;
-        let result = client.search_messages(request).await?;
-
-        let trace_groups = build_trace_groups(&result.messages, &group_by);
-        let summary = build_trace_summary(&trace_groups);
-
-        Ok(TraceStatus {
-            ok: true,
-            command: "trace",
-            query,
-            grouped_by: group_by,
-            total_events: result.messages.len(),
-            trace_groups,
-            summary,
         })
     }
 
@@ -516,6 +470,66 @@ impl ApplicationService {
             query: request.query,
             returned: result.messages.len(),
             messages: result.messages,
+            grouped_by: None,
+            groups: None,
+            metadata,
+        })
+    }
+
+    async fn execute_paginated_search(
+        &self,
+        input: &SearchCommandInput,
+    ) -> Result<MessageSearchStatus, CliError> {
+        let config = self
+            .config_store
+            .load()
+            .await?
+            .ok_or(CliError::Config(ConfigError::NotConfigured))?;
+        let client = self.graylog_gateway_with_config(config)?;
+        let mut request = self.build_search_request(input.clone(), DEFAULT_SEARCH_LIMIT);
+        let mut all_messages = Vec::new();
+        let mut metadata = serde_json::Map::new();
+        let mut total_results = None;
+
+        request.limit = 500;
+        request.offset = 0;
+
+        loop {
+            let result = client.search_messages(request.clone()).await?;
+
+            if metadata.is_empty() {
+                metadata = result.metadata.clone();
+            }
+
+            if total_results.is_none() {
+                total_results = result.total_results;
+            }
+
+            let fetched = result.messages.len();
+            all_messages.extend(result.messages);
+
+            request.offset += fetched as u64;
+
+            if fetched == 0
+                || total_results.is_some_and(|total| request.offset >= total)
+                || fetched < request.limit as usize
+            {
+                break;
+            }
+        }
+
+        if let Some(total_results) = total_results {
+            metadata.insert("total_results".to_string(), json!(total_results));
+        }
+
+        Ok(MessageSearchStatus {
+            ok: true,
+            command: "search",
+            query: request.query,
+            returned: all_messages.len(),
+            messages: all_messages,
+            grouped_by: None,
+            groups: None,
             metadata,
         })
     }
@@ -544,6 +558,8 @@ impl ApplicationService {
             query: request.query,
             returned: result.messages.len(),
             messages: result.messages,
+            grouped_by: None,
+            groups: None,
             metadata,
         })
     }
@@ -591,53 +607,34 @@ impl ApplicationService {
     }
 }
 
-fn build_trace_groups(messages: &[NormalizedRow], group_by: &str) -> Vec<TraceGroup> {
+fn apply_grouping(mut status: MessageSearchStatus, group_by: &str) -> MessageSearchStatus {
+    status.grouped_by = Some(group_by.to_string());
+    status.groups = Some(build_search_groups(&status.messages, group_by));
+    status
+}
+
+fn build_search_groups(messages: &[NormalizedRow], group_by: &str) -> Vec<SearchGroup> {
     let field_key = format!("field: {group_by}");
     let mut groups: BTreeMap<String, Vec<&NormalizedRow>> = BTreeMap::new();
 
     for row in messages {
-        let group_key = row
+        let key = row
             .get(&field_key)
             .or_else(|| row.get(group_by))
             .and_then(|value| value.as_str())
             .unwrap_or("unknown")
             .to_string();
-        groups.entry(group_key).or_default().push(row);
+        groups.entry(key).or_default().push(row);
     }
 
     groups
         .into_iter()
-        .map(|(correlation_id, rows)| {
-            let trigger = rows
-                .first()
-                .and_then(|row| row.get("field: message").or_else(|| row.get("message")))
-                .and_then(|value| value.as_str())
-                .map(extract_trigger)
-                .unwrap_or_else(|| "unknown".to_string());
-
-            let duration_ms = compute_group_duration(&rows);
-            let events = categorize_events(&rows);
-
-            TraceGroup {
-                correlation_id,
-                trigger,
-                duration_ms,
-                events,
-            }
+        .map(|(key, rows)| SearchGroup {
+            key,
+            count: rows.len(),
+            duration_ms: compute_group_duration(&rows),
         })
         .collect()
-}
-
-fn extract_trigger(message: &str) -> String {
-    if message.starts_with("Request started") {
-        let parts: Vec<&str> = message.splitn(4, '"').collect();
-        if parts.len() >= 4 {
-            let method_path = parts[3].trim().trim_matches('"');
-            return method_path.to_string();
-        }
-    }
-
-    message.chars().take(120).collect()
 }
 
 fn compute_group_duration(rows: &[&NormalizedRow]) -> Option<u64> {
@@ -670,336 +667,6 @@ fn parse_timestamp_to_millis(ts: &str) -> Option<u64> {
 
     let days = (year - 1970) * 365 + (month.saturating_sub(1)) * 31 + day.saturating_sub(1);
     Some(days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis)
-}
-
-fn categorize_events(rows: &[&NormalizedRow]) -> Vec<TraceEvent> {
-    let mut events = Vec::new();
-    let mut db_count = 0_usize;
-    let mut internal_count = 0_usize;
-
-    for row in rows {
-        let message = row
-            .get("field: message")
-            .or_else(|| row.get("message"))
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        let level = row
-            .get("field: level")
-            .or_else(|| row.get("level"))
-            .and_then(|value| value.as_u64())
-            .map(|value| value as u8);
-        let source = row
-            .get("field: source")
-            .or_else(|| row.get("source"))
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string());
-        let timestamp = row
-            .get("field: timestamp")
-            .or_else(|| row.get("timestamp"))
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string());
-
-        if level.is_some_and(|current_level| current_level <= 3) {
-            events.push(TraceEvent {
-                event_type: "error".to_string(),
-                timestamp,
-                source,
-                level,
-                message: Some(message.to_string()),
-                method: None,
-                target: None,
-                status: None,
-                duration_ms: None,
-                field: None,
-                old: None,
-                new: None,
-                target_adapter: None,
-                path: None,
-                count: None,
-            });
-            continue;
-        }
-
-        if level == Some(4) {
-            events.push(TraceEvent {
-                event_type: "warning".to_string(),
-                timestamp,
-                source,
-                level,
-                message: Some(message.to_string()),
-                method: None,
-                target: None,
-                status: None,
-                duration_ms: None,
-                field: None,
-                old: None,
-                new: None,
-                target_adapter: None,
-                path: None,
-                count: None,
-            });
-            continue;
-        }
-
-        if message.contains("Differences found") || message.contains("Object comparison found") {
-            let diffs = if message.contains("Differences found:") {
-                message
-                    .split_once("Differences found: ")
-                    .map(|(_, diff)| diff)
-                    .unwrap_or("")
-            } else {
-                ""
-            };
-            events.push(TraceEvent {
-                event_type: "state_change".to_string(),
-                timestamp,
-                source,
-                level,
-                message: None,
-                method: None,
-                target: None,
-                status: None,
-                duration_ms: None,
-                field: Some(diffs.chars().take(200).collect()),
-                old: None,
-                new: None,
-                target_adapter: None,
-                path: None,
-                count: None,
-            });
-            continue;
-        }
-
-        if message.contains("HooksHttpClient")
-            && message.contains("Sending HTTP request")
-            && let Some(url) = extract_url_from_message(message)
-        {
-            let adapter = extract_adapter_from_url(&url);
-            let path = extract_path_from_url(&url);
-            events.push(TraceEvent {
-                event_type: "callback".to_string(),
-                timestamp,
-                source,
-                level,
-                message: None,
-                method: None,
-                target: None,
-                status: None,
-                duration_ms: None,
-                field: None,
-                old: None,
-                new: None,
-                target_adapter: adapter,
-                path,
-                count: None,
-            });
-            continue;
-        }
-
-        if message.contains("Sending HTTP request")
-            && let Some(url) = extract_url_from_message(message)
-        {
-            let method = extract_method_from_message(message);
-            events.push(TraceEvent {
-                event_type: "external_call".to_string(),
-                timestamp,
-                source,
-                level,
-                message: None,
-                method,
-                target: Some(url),
-                status: None,
-                duration_ms: None,
-                field: None,
-                old: None,
-                new: None,
-                target_adapter: None,
-                path: None,
-                count: None,
-            });
-            continue;
-        }
-
-        if (message.contains("Received HTTP response after")
-            || message.contains("Received Cosmos DB response after"))
-            && let Some(duration) = extract_duration_from_message(message)
-        {
-            let status = extract_status_from_response(message);
-            if message.contains("Cosmos DB") {
-                db_count += 1;
-            } else {
-                events.push(TraceEvent {
-                    event_type: "external_call_response".to_string(),
-                    timestamp,
-                    source,
-                    level,
-                    message: None,
-                    method: None,
-                    target: None,
-                    status,
-                    duration_ms: Some(duration),
-                    field: None,
-                    old: None,
-                    new: None,
-                    target_adapter: None,
-                    path: None,
-                    count: None,
-                });
-            }
-            continue;
-        }
-
-        if message.starts_with("Request started") || message.starts_with("Request processed") {
-            internal_count += 1;
-            continue;
-        }
-
-        if message.contains("Cosmos DB request") || message.contains("Cosmos DB response") {
-            db_count += 1;
-            continue;
-        }
-
-        internal_count += 1;
-    }
-
-    if db_count > 0 {
-        events.push(TraceEvent {
-            event_type: "db_op".to_string(),
-            timestamp: None,
-            source: None,
-            level: None,
-            message: None,
-            method: None,
-            target: None,
-            status: None,
-            duration_ms: None,
-            field: None,
-            old: None,
-            new: None,
-            target_adapter: None,
-            path: None,
-            count: Some(db_count),
-        });
-    }
-
-    if internal_count > 0 {
-        events.push(TraceEvent {
-            event_type: "internal".to_string(),
-            timestamp: None,
-            source: None,
-            level: None,
-            message: None,
-            method: None,
-            target: None,
-            status: None,
-            duration_ms: None,
-            field: None,
-            old: None,
-            new: None,
-            target_adapter: None,
-            path: None,
-            count: Some(internal_count),
-        });
-    }
-
-    events
-}
-
-fn extract_url_from_message(message: &str) -> Option<String> {
-    for part in message.split_whitespace() {
-        if part.starts_with("http://") || part.starts_with("https://") {
-            return Some(part.trim_matches('"').to_string());
-        }
-    }
-
-    None
-}
-
-fn extract_method_from_message(message: &str) -> Option<String> {
-    for part in message.split('"') {
-        let trimmed = part.trim();
-        if matches!(trimmed, "GET" | "POST" | "PUT" | "PATCH" | "DELETE") {
-            return Some(trimmed.to_string());
-        }
-    }
-
-    None
-}
-
-fn extract_duration_from_message(message: &str) -> Option<u64> {
-    if let Some(after) = message.split("after ").nth(1) {
-        let num_str: String = after
-            .chars()
-            .take_while(|value| value.is_ascii_digit() || *value == '.')
-            .collect();
-        let duration: f64 = num_str.parse().ok()?;
-        Some(duration as u64)
-    } else {
-        None
-    }
-}
-
-fn extract_status_from_response(message: &str) -> Option<u64> {
-    if message.contains(" BadRequest") {
-        return Some(400);
-    }
-    if message.contains(" NotFound") {
-        return Some(404);
-    }
-    if message.contains(" Conflict") {
-        return Some(409);
-    }
-    if message.contains(" InternalServerError") {
-        return Some(500);
-    }
-    if message.contains(" Created") {
-        return Some(201);
-    }
-    if message.contains(" OK") {
-        return Some(200);
-    }
-    if message.contains(" NoContent") {
-        return Some(204);
-    }
-
-    None
-}
-
-fn extract_adapter_from_url(url: &str) -> Option<String> {
-    let host = url.split("//").nth(1)?.split('.').next()?;
-    Some(host.to_string())
-}
-
-fn extract_path_from_url(url: &str) -> Option<String> {
-    let after_scheme = url.split("//").nth(1)?;
-    let path_start = after_scheme.find('/')?;
-    Some(after_scheme[path_start..].to_string())
-}
-
-fn build_trace_summary(groups: &[TraceGroup]) -> TraceSummary {
-    let mut total_errors = 0_usize;
-    let mut total_external_calls = 0_usize;
-    let mut services = BTreeSet::new();
-
-    for group in groups {
-        for event in &group.events {
-            match event.event_type.as_str() {
-                "error" => total_errors += 1,
-                "external_call" | "external_call_response" => total_external_calls += 1,
-                _ => {}
-            }
-            if let Some(source) = &event.source {
-                let service = source.split('-').next().unwrap_or(source);
-                services.insert(service.to_string());
-            }
-        }
-    }
-
-    TraceSummary {
-        total_errors,
-        total_external_calls,
-        services_involved: services.into_iter().collect(),
-    }
 }
 
 struct UnconfiguredConfigStore;

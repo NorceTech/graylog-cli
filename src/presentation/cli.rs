@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::domain::error::{CliError, ValidationError};
 use crate::domain::models::{
-    AggregateCommandInput, AggregationType, ErrorsCommandInput, SearchCommandInput, SortDirection,
+    AggregateCommandInput, AggregationType, SearchCommandInput, SortDirection,
 };
 use crate::domain::timerange::{CommandTimerange, TimerangeInput};
 
@@ -30,14 +30,10 @@ pub enum Commands {
     Auth(AuthArgs),
     /// Search Graylog messages.
     Search(SearchArgs),
-    /// Fetch recent errors.
-    Errors(ErrorsArgs),
     /// Run an aggregation query.
     Aggregate(AggregateArgs),
     /// Count messages by log level.
     CountByLevel(CountByLevelArgs),
-    /// Trace all events for a checkout order.
-    Trace(TraceArgs),
     /// Work with Graylog streams.
     Streams {
         #[command(subcommand)]
@@ -62,16 +58,8 @@ impl Commands {
                 args.timerange.try_into_timerange()?;
                 Ok(())
             }
-            Self::Errors(args) => {
-                args.timerange.try_into_timerange()?;
-                Ok(())
-            }
             Self::Aggregate(args) => args.validate(),
             Self::CountByLevel(args) => {
-                args.timerange.try_into_timerange()?;
-                Ok(())
-            }
-            Self::Trace(args) => {
                 args.timerange.try_into_timerange()?;
                 Ok(())
             }
@@ -107,6 +95,12 @@ pub struct SearchArgs {
     pub sort: Option<String>,
     #[arg(long = "sort-direction", value_enum)]
     pub sort_direction: Option<SortDirectionArg>,
+    #[arg(long = "group-by")]
+    pub group_by: Option<String>,
+    #[arg(long = "all-pages")]
+    pub all_pages: bool,
+    #[arg(long = "all-fields")]
+    pub all_fields: bool,
     #[arg(long = "stream-id")]
     pub stream_id: Vec<String>,
 }
@@ -121,24 +115,10 @@ impl SearchArgs {
             offset: self.offset,
             sort: self.sort.clone(),
             sort_direction: self.sort_direction.map(Into::into),
+            group_by: self.group_by.clone(),
+            all_pages: self.all_pages,
+            all_fields: self.all_fields,
             streams: self.stream_id.clone(),
-        })
-    }
-}
-
-#[derive(Debug, Args)]
-pub struct ErrorsArgs {
-    #[command(flatten)]
-    pub timerange: TimerangeArgs,
-    #[arg(long = "limit", value_parser = clap::value_parser!(u64).range(1..=1000))]
-    pub limit: Option<u64>,
-}
-
-impl ErrorsArgs {
-    pub fn to_input(&self) -> Result<ErrorsCommandInput, ValidationError> {
-        Ok(ErrorsCommandInput {
-            timerange: self.timerange.try_into_timerange()?,
-            limit: self.limit,
         })
     }
 }
@@ -212,15 +192,6 @@ impl CountByLevelArgs {
     }
 }
 
-#[derive(Debug, Args)]
-pub struct TraceArgs {
-    pub query: String,
-    #[arg(long = "group-by", default_value = "correlationId")]
-    pub group_by: String,
-    #[command(flatten)]
-    pub timerange: TimerangeArgs,
-}
-
 #[derive(Debug, Subcommand)]
 pub enum StreamsCommands {
     /// List streams.
@@ -283,6 +254,9 @@ impl StreamSearchArgs {
             offset: None,
             sort: None,
             sort_direction: None,
+            group_by: None,
+            all_pages: false,
+            all_fields: false,
             streams: vec![self.stream_id.clone()],
         })
     }

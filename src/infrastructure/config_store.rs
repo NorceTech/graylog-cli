@@ -11,12 +11,21 @@ use tokio::task;
 use std::future::Future;
 use std::pin::Pin;
 
+use serde::{Deserialize, Serialize};
+
 use crate::application::service::ConfigStore;
 use crate::domain::config::{GraylogConfig, StoredConfig};
 use crate::domain::error::ConfigError;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FileConfigStore;
+
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldsCache {
+    pub fields: Vec<String>,
+    pub fetched_at: u64,
+}
 
 impl FileConfigStore {
     pub fn new() -> Self {
@@ -130,6 +139,44 @@ impl ConfigStore for FileConfigStore {
     ) -> Pin<Box<dyn Future<Output = Result<(), ConfigError>> + Send + '_>> {
         Box::pin(async move { self.save_impl(config).await })
     }
+}
+
+fn fields_cache_path(config_path: &Path) -> PathBuf {
+    config_path.with_file_name("fields_cache.json")
+}
+
+pub fn read_fields_cache(config_path: &Path, ttl_seconds: u64) -> Option<Vec<String>> {
+    let cache_path = fields_cache_path(config_path);
+    let contents = std::fs::read_to_string(&cache_path).ok()?;
+    let cache: FieldsCache = serde_json::from_str(&contents).ok()?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+
+    if now.saturating_sub(cache.fetched_at) < ttl_seconds {
+        Some(cache.fields)
+    } else {
+        None
+    }
+}
+
+pub fn write_fields_cache(config_path: &Path, fields: &[String]) -> Result<(), ConfigError> {
+    let cache_path = fields_cache_path(config_path);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let cache = FieldsCache {
+        fields: fields.to_vec(),
+        fetched_at: now,
+    };
+    let json = serde_json::to_string(&cache).map_err(|error| ConfigError::Serialization {
+        message: error.to_string(),
+    })?;
+
+    std::fs::write(&cache_path, json).map_err(|error| ConfigError::Filesystem {
+        operation: "writing fields cache",
+        path: cache_path.display().to_string(),
+        message: error.to_string(),
+    })
 }
 
 fn write_config_atomically(config_path: &Path, serialized: &str) -> Result<(), ConfigError> {
