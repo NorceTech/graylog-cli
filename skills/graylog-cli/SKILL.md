@@ -1,6 +1,7 @@
 ---
 name: graylog-cli
-description: Query Graylog from the terminal. Use when you need to search logs, fetch errors, run aggregations, inspect streams, check system health, or authenticate against a Graylog instance.
+description: Query and analyze Graylog logs from the terminal. Use when debugging issues, investigating errors, analyzing system behavior, or monitoring log patterns in Graylog. Supports search, aggregation, stream inspection, and system health checks.
+argument-hint: <command> [args]
 ---
 
 # Graylog CLI
@@ -9,26 +10,23 @@ A command-line interface for Graylog. Runtime command success output is JSON on 
 
 ## When to Use
 
-- Searching Graylog messages for a query string or pattern
-- Fetching recent errors from a Graylog instance
-- Running aggregation queries (terms, date histogram, cardinality, stats)
-- Counting messages by log level
-- Listing, finding, or searching within Graylog streams
-- Checking Graylog system info or reachability
-- Persisting Graylog credentials for non-interactive use
+- **Debugging**: Investigate errors, trace request flows, find root causes
+- **Monitoring**: Check error rates, count by log level, verify system health
+- **Investigation**: Search for specific patterns, aggregate trends, explore streams
+- **CI/automation**: Non-interactive JSON output, exit codes for scripting
 
 ## Prerequisites
 
 - A running Graylog instance with an access token
-- The `graylog-cli` binary on PATH (or invoke as `./target/debug/graylog-cli` / `./target/release/graylog-cli`)
+- The `graylog-cli` binary on PATH
 - No TTY required. All commands are non-interactive
 
 ## One-Time Auth
 
-Store credentials before running any query. The command writes a TOML config and exits. Re-running overwrites without prompting.
+Store credentials before running any query. Re-running overwrites without prompting.
 
 ```bash
-graylog-cli auth -u <URL> -t <TOKEN>
+graylog-cli auth --url <URL> --token <TOKEN>
 ```
 
 - `<URL>` is the Graylog base URL, e.g. `https://graylog.example.com`
@@ -43,7 +41,51 @@ Config is stored at:
 
 Directory permissions are `0700`, file permissions are `0600`.
 
-## Command Map
+## Graylog Query Language
+
+The `search`, `aggregate`, and `streams search` commands accept Graylog's Lucene-based query syntax. Understanding the query language is essential for effective use.
+
+### Log Levels (Syslog Severity)
+
+Graylog stores `level` as a **numeric** field (0–7):
+
+| Level | Severity | Meaning |
+|:-----:|----------|---------|
+| 0 | Emergency | System unusable |
+| 1 | Alert | Immediate action needed |
+| 2 | Critical | Critical condition |
+| 3 | Error | Error condition |
+| 4 | Warning | Warning condition |
+| 5 | Notice | Normal but notable |
+| 6 | Informational | Informational |
+| 7 | Debug | Debug messages |
+
+### Query Construction Rules
+
+1. **Keywords**: Use directly — `checkout`, `timeout`, `payment`
+2. **Level filtering**: Use `level:<=N` to include all levels from 0 (most severe) through N. Example: `level:<=3` matches Emergency, Alert, Critical, and Error
+3. **Field-specific**: Use `field:value` syntax — `source:api-gateway`, `facility:cron`
+4. **Combining**: Use `AND`, `OR`, `NOT` — `"connection refused" AND level:<=3`
+5. **Wildcards**: `message:*timeout*` for substring matches
+6. **Grouping**: Parentheses for precedence — `(source:svc-a OR source:svc-b) AND level:<=4`
+
+### Common Query Patterns
+
+```bash
+# Errors and above for a specific service
+"source:payment-service AND level:<=3"
+
+# Specific keyword with warning level and below
+"checkout AND level:<=4"
+
+# Exclude debug noise
+"* AND NOT level:7"
+
+# Match any message (wildcard)
+"*"
+```
+
+## Command Reference
 
 ### search
 
@@ -60,14 +102,14 @@ graylog-cli search <QUERY> [--time-range 15m] [--field message] [--field source]
 | `--from` / `--to` | ISO 8601 timestamps | Absolute range. Both required together |
 | `--field` | repeatable | Restrict returned fields |
 | `--limit` | 1-1000 | |
-| `--offset` | non-negative integer | |
-| `--sort` | field name | |
-| `--sort-direction` | `asc`, `desc` | |
+| `--offset` | non-negative integer | Pagination offset |
+| `--sort` | field name | Default: `timestamp` |
+| `--sort-direction` | `asc`, `desc` | Default: `desc` |
 | `--stream-id` | repeatable | Scope search to specific streams |
 
 ### errors
 
-Fetch recent error messages.
+Fetch recent error-level messages (level 0–3: Emergency, Alert, Critical, Error). Uses the query `level:<=3`.
 
 ```bash
 graylog-cli errors [--time-range 1h] [--limit 100]
@@ -116,8 +158,9 @@ graylog-cli streams search <STREAM_ID> <QUERY> [--time-range 15m] [--field messa
 graylog-cli streams last-event <STREAM_ID> --time-range 1h
 ```
 
-`streams search` accepts `--time-range`/`--from`/`--to`, `--field` (repeatable), and `--limit` (1-100).
-`streams last-event` accepts `--time-range`/`--from`/`--to`.
+- `streams find` searches by name (case-insensitive substring match)
+- `streams search` accepts `--time-range`/`--from`/`--to`, `--field` (repeatable), and `--limit` (1-100)
+- `streams last-event` accepts `--time-range`/`--from`/`--to`
 
 ### system
 
@@ -135,56 +178,142 @@ Check that Graylog is reachable and credentials are valid.
 graylog-cli ping
 ```
 
-## Common Workflows
+## Investigation Workflows
 
-### Find recent errors in a service
+When investigating an issue, follow these patterns. Output is JSON — pipe through `jq` for filtering.
 
-```bash
-graylog-cli errors --time-range 30m --limit 20
-```
+### "What's breaking right now?"
 
-### Search for a specific message pattern
+Quick snapshot of current errors:
 
 ```bash
-graylog-cli search "connection refused" --time-range 1h --field message --field source
+# Recent errors with full context
+graylog-cli errors --time-range 30m --limit 20 | jq .
+
+# Error distribution by level
+graylog-cli count-by-level --time-range 1h | jq .
+
+# Error distribution by source
+graylog-cli aggregate "level:<=3" --aggregation-type terms --field source --size 20 --time-range 1h | jq .
 ```
 
-### Count log levels over the last hour
+### "Show me all logs for X"
+
+Search for a keyword, order ID, request ID, or error message:
 
 ```bash
-graylog-cli count-by-level --time-range 1h
+# Simple keyword search
+graylog-cli search "checkout" --time-range 1h --limit 50 | jq .
+
+# Scoped to a stream
+graylog-cli search "timeout" --stream-id <STREAM_ID> --time-range 15m | jq .
+
+# Specific fields only (smaller output)
+graylog-cli search "payment" --field message --field source --field timestamp --limit 50 | jq .
 ```
 
-### Top source IPs from the past day
+### "Is service X healthy?"
+
+Check error rates and patterns for a specific service:
 
 ```bash
-graylog-cli aggregate "*" --aggregation-type terms --field source --size 10 --time-range 1d
+# All errors from a service
+graylog-cli search "source:api-gateway AND level:<=3" --time-range 1h | jq .
+
+# Error count breakdown
+graylog-cli aggregate "source:api-gateway AND level:<=3" --aggregation-type terms --field level --time-range 1h | jq .
+
+# Error trend over time
+graylog-cli aggregate "source:api-gateway AND level:<=3" --aggregation-type date_histogram --field timestamp --interval 1h --time-range 1d | jq .
 ```
 
-### Find a stream and search within it
+### "What are the top N values for field X?"
 
 ```bash
-graylog-cli streams find "production"
-graylog-cli streams search <STREAM_ID> "timeout" --time-range 15m
+# Top sources
+graylog-cli aggregate "*" --aggregation-type terms --field source --size 10 --time-range 1d | jq .
+
+# Top error messages
+graylog-cli aggregate "level:<=3" --aggregation-type terms --field message --size 20 --time-range 1h | jq .
+
+# Unique values (cardinality)
+graylog-cli aggregate "*" --aggregation-type cardinality --field source --time-range 1h | jq .
 ```
 
-### Verify connectivity
+### "Find a stream and search within it"
 
 ```bash
-graylog-cli ping
+# Find by name
+graylog-cli streams find "production" | jq .
+
+# Search within the found stream
+graylog-cli streams search <STREAM_ID> "error" --time-range 15m --limit 50 | jq .
+
+# Get the last event in a stream
+graylog-cli streams last-event <STREAM_ID> --time-range 1h | jq .
 ```
+
+### "Verify connectivity and auth"
+
+```bash
+graylog-cli ping | jq .
+graylog-cli system info | jq .
+```
+
+## Interpreting Output
+
+All runtime output is JSON. Key fields:
+
+**Search results** — `messages` array with `returned` count and `query` echo:
+```json
+{
+  "ok": true,
+  "command": "search",
+  "query": "checkout AND level:<=3",
+  "returned": 42,
+  "messages": [...],
+  "metadata": { "total_results": 420 }
+}
+```
+
+**Aggregation results** — `rows` array:
+```json
+{
+  "ok": true,
+  "command": "aggregate",
+  "aggregation_type": "terms",
+  "rows": [
+    { "source": "api-gateway", "count()": 150 },
+    { "source": "payment-service", "count()": 23 }
+  ],
+  "metadata": {}
+}
+```
+
+**Error responses** — always include `ok: false`, `code`, and `message`:
+```json
+{
+  "ok": false,
+  "code": "auth_error",
+  "message": "Graylog rejected the supplied credentials"
+}
+```
+
+## Exit Codes
+
+| Code | Meaning |
+|:----:|---------|
+| 0 | Success |
+| 1 | Internal error |
+| 2 | Validation or config error |
+| 3 | Auth error (invalid or expired token) |
+| 4 | Not found or unsupported endpoint |
+| 5 | Network or transport error |
 
 ## Safety Rules
 
 - **Never log or print the token.** Use `$GRAYLOG_TOKEN` or a secret manager. Do not paste real tokens into shell history or CI config
-- **Runtime command output is JSON.** Pipe successful command output through `jq` for filtering. Built-in `--help` and `--version` output remain plain text from clap
-- **Errors go to stderr.** Successful output goes to stdout. Check exit codes:
-  - `0` success
-  - `1` internal error
-  - `2` validation or config error
-  - `3` auth error (invalid or expired token)
-  - `4` not found or unsupported endpoint
-  - `5` network or transport error
+- **Runtime command output is JSON.** Pipe through `jq` for filtering. Built-in `--help` and `--version` remain plain text
 - **Auth overwrites silently.** Running `graylog-cli auth` again replaces the stored config without confirmation
 - **No interactive prompts.** Every command runs to completion or exits with a non-zero code. Safe for CI
 
@@ -192,7 +321,7 @@ graylog-cli ping
 
 **"not configured" error**
 
-Run `graylog-cli auth -u <URL> -t <TOKEN>` first. Check that the config file exists at the expected path (see [One-Time Auth](#one-time-auth)).
+Run `graylog-cli auth --url <URL> --token <TOKEN>` first. Check that the config file exists at the expected path (see [One-Time Auth](#one-time-auth)).
 
 **Exit code 3 (auth error)**
 
@@ -204,8 +333,12 @@ Graylog is unreachable. Check the URL, network connectivity, and any proxy setti
 
 **Empty results from search or aggregate**
 
-The timerange may not cover the period you expect. Try a wider range with `--time-range 1d`. Verify the query syntax matches Graylog's Lucene-based search language.
+The timerange may not cover the period you expect. Try a wider range with `--time-range 1d`. Verify the query syntax — remember that `level` is numeric (0–7), not text.
 
 **"interval is only supported when aggregation-type date_histogram is selected"**
 
 Remove `--interval` from non-histogram aggregations, or switch to `--aggregation-type date_histogram`.
+
+**Search returns no matches but logs exist**
+
+The query may be using text-based level names. Use numeric operators: `level:<=3` (not `level:ERROR`). See [Log Levels](#log-levels-syslog-severity).
