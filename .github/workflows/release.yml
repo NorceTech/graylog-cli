@@ -40,10 +40,8 @@ jobs:
       - name: Build Linux binary
         run: nix build
 
-      - name: Prepare and strip Linux binary
-        run: |
-          cp result/bin/graylog-cli graylog-cli-linux-x86_64
-          strip graylog-cli-linux-x86_64
+      - name: Prepare artifact
+        run: cp result/bin/graylog-cli graylog-cli-linux-x86_64
 
       - uses: actions/upload-artifact@v4
         with:
@@ -64,10 +62,8 @@ jobs:
       - name: Build macOS binary
         run: nix build
 
-      - name: Prepare and strip macOS binary
-        run: |
-          cp result/bin/graylog-cli graylog-cli-macos-aarch64
-          strip -x graylog-cli-macos-aarch64
+      - name: Prepare artifact
+        run: cp result/bin/graylog-cli graylog-cli-macos-aarch64
 
       - uses: actions/upload-artifact@v4
         with:
@@ -88,10 +84,8 @@ jobs:
       - name: Build Windows binary
         run: nix build .#graylog-cli-windows
 
-      - name: Prepare and strip Windows binary
-        run: |
-          cp result/bin/graylog-cli.exe graylog-cli-windows-x86_64.exe
-          nix shell nixpkgs#pkgsCross.mingwW64.stdenv.cc.bintools -c x86_64-w64-mingw32-strip graylog-cli-windows-x86_64.exe
+      - name: Prepare artifact
+        run: cp result/bin/graylog-cli.exe graylog-cli-windows-x86_64.exe
 
       - uses: actions/upload-artifact@v4
         with:
