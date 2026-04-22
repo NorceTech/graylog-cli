@@ -39,6 +39,7 @@ pub struct SearchCommandInput {
     pub sort_direction: Option<SortDirection>,
     pub group_by: Option<String>,
     pub all_pages: bool,
+    pub all_fields: bool,
     pub streams: Vec<String>,
 }
 

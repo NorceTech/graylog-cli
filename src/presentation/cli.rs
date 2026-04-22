@@ -105,6 +105,8 @@ pub struct SearchArgs {
     pub group_by: Option<String>,
     #[arg(long = "all-pages")]
     pub all_pages: bool,
+    #[arg(long = "all-fields")]
+    pub all_fields: bool,
     #[arg(long = "stream-id")]
     pub stream_id: Vec<String>,
 }
@@ -121,6 +123,7 @@ impl SearchArgs {
             sort_direction: self.sort_direction.map(Into::into),
             group_by: self.group_by.clone(),
             all_pages: self.all_pages,
+            all_fields: self.all_fields,
             streams: self.stream_id.clone(),
         })
     }
@@ -276,6 +279,7 @@ impl StreamSearchArgs {
             sort_direction: None,
             group_by: None,
             all_pages: false,
+            all_fields: false,
             streams: vec![self.stream_id.clone()],
         })
     }

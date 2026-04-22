@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::domain::error::ValidationError;
 
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
+pub const DEFAULT_FIELDS_CACHE_TTL_SECONDS: u64 = 300;
+
+fn default_fields_cache_ttl() -> u64 {
+    DEFAULT_FIELDS_CACHE_TTL_SECONDS
+}
 
 #[derive(Debug, Clone)]
 pub struct GraylogConfig {
@@ -11,6 +16,7 @@ pub struct GraylogConfig {
     pub token: SecretString,
     pub timeout_seconds: u64,
     pub verify_tls: bool,
+    pub fields_cache_ttl_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +30,8 @@ pub struct StoredGraylogConfig {
     pub token: String,
     pub timeout_seconds: u64,
     pub verify_tls: bool,
+    #[serde(default = "default_fields_cache_ttl")]
+    pub fields_cache_ttl_seconds: u64,
 }
 
 impl GraylogConfig {
@@ -32,12 +40,20 @@ impl GraylogConfig {
         token: SecretString,
         timeout_seconds: u64,
         verify_tls: bool,
+        fields_cache_ttl_seconds: u64,
     ) -> Result<Self, ValidationError> {
         let base_url = normalize_url(base_url.into())?;
 
         if timeout_seconds == 0 {
             return Err(ValidationError::InvalidValue {
                 field: "graylog.timeout_seconds",
+                message: "must be greater than zero".to_string(),
+            });
+        }
+
+        if fields_cache_ttl_seconds == 0 {
+            return Err(ValidationError::InvalidValue {
+                field: "graylog.fields_cache_ttl_seconds",
                 message: "must be greater than zero".to_string(),
             });
         }
@@ -53,6 +69,7 @@ impl GraylogConfig {
             token,
             timeout_seconds,
             verify_tls,
+            fields_cache_ttl_seconds,
         })
     }
 
@@ -82,6 +99,7 @@ impl Default for StoredConfig {
                 token: String::new(),
                 timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
                 verify_tls: true,
+                fields_cache_ttl_seconds: DEFAULT_FIELDS_CACHE_TTL_SECONDS,
             },
         }
     }
@@ -95,6 +113,7 @@ impl StoredConfig {
                 token: config.token.expose_secret().to_owned(),
                 timeout_seconds: config.timeout_seconds,
                 verify_tls: config.verify_tls,
+                fields_cache_ttl_seconds: config.fields_cache_ttl_seconds,
             },
         }
     }
@@ -105,6 +124,7 @@ impl StoredConfig {
             SecretString::new(self.graylog.token),
             self.graylog.timeout_seconds,
             self.graylog.verify_tls,
+            self.graylog.fields_cache_ttl_seconds,
         )
     }
 }

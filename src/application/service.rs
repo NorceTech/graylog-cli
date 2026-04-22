@@ -8,7 +8,10 @@ use exn::ResultExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 
-use crate::domain::config::{DEFAULT_TIMEOUT_SECONDS, GraylogConfig, StoredConfig, normalize_url};
+use crate::domain::config::{
+    DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, GraylogConfig, StoredConfig,
+    normalize_url,
+};
 use crate::domain::error::CliError;
 use crate::domain::error::ConfigError;
 use crate::domain::error::HttpError;
@@ -184,6 +187,7 @@ impl ApplicationService {
             SecretString::new(trimmed_token),
             DEFAULT_TIMEOUT_SECONDS,
             true,
+            DEFAULT_FIELDS_CACHE_TTL_SECONDS,
         )?;
 
         let config_path = self.config_store.config_path().map_err(CliError::from)?;
@@ -200,6 +204,34 @@ impl ApplicationService {
     }
 
     pub async fn search(&self, input: SearchCommandInput) -> Result<MessageSearchStatus, CliError> {
+        let mut input = input;
+
+        if input.all_fields && input.fields.is_empty() {
+            let config = self
+                .config_store
+                .load()
+                .await?
+                .ok_or(CliError::Config(ConfigError::NotConfigured))?;
+            let config_path = self.config_store.config_path()?;
+            let ttl = config.fields_cache_ttl_seconds;
+
+            let fields =
+                match crate::infrastructure::config_store::read_fields_cache(&config_path, ttl) {
+                    Some(fields) => fields,
+                    None => {
+                        let client = self.graylog_gateway_with_config(config)?;
+                        let result = client.list_fields().await?;
+                        crate::infrastructure::config_store::write_fields_cache(
+                            &config_path,
+                            &result.fields,
+                        )?;
+                        result.fields
+                    }
+                };
+
+            input.fields = fields;
+        }
+
         let group_by = input.group_by.clone();
         let mut status = if input.all_pages {
             self.execute_paginated_search(&input).await?
@@ -232,6 +264,7 @@ impl ApplicationService {
                     sort_direction: None,
                     group_by: None,
                     all_pages: false,
+                    all_fields: false,
                     streams: Vec::new(),
                 },
                 DEFAULT_ERRORS_LIMIT,
@@ -336,6 +369,7 @@ impl ApplicationService {
             sort_direction: Some(SortDirection::Desc),
             group_by: None,
             all_pages: false,
+            all_fields: false,
             streams: vec![stream_id],
         })?;
 
