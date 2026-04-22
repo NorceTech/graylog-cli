@@ -217,6 +217,12 @@ impl ApplicationService {
             input.fields = fields;
         }
 
+        if let Some(ref group_by) = input.group_by {
+            if !input.fields.contains(group_by) {
+                input.fields.push(group_by.clone());
+            }
+        }
+
         let group_by = input.group_by.clone();
         let mut status = if input.all_pages {
             self.execute_paginated_search(&input).await?
