@@ -37,9 +37,10 @@ Config is stored at:
 | Condition | Path |
 |-----------|------|
 | `XDG_CONFIG_HOME` is set | `$XDG_CONFIG_HOME/graylog-cli/config.toml` |
-| Default | `$HOME/.config/graylog-cli/config.toml` |
+| Unix default | `$HOME/.config/graylog-cli/config.toml` |
+| Windows default | `%APPDATA%\graylog-cli\config.toml` |
 
-Directory permissions are `0700`, file permissions are `0600`.
+On Unix, directory permissions are `0700` and file permissions are `0600`. On Windows, NTFS ACLs inherit from the parent directory — no explicit permission hardening is applied.
 
 ## Graylog Query Language
 
