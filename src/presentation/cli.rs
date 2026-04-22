@@ -36,6 +36,8 @@ pub enum Commands {
     Aggregate(AggregateArgs),
     /// Count messages by log level.
     CountByLevel(CountByLevelArgs),
+    /// Trace all events for a checkout order.
+    Trace(TraceArgs),
     /// Work with Graylog streams.
     Streams {
         #[command(subcommand)]
@@ -48,6 +50,8 @@ pub enum Commands {
     },
     /// Check that Graylog is reachable.
     Ping,
+    /// List all indexed fields.
+    Fields,
 }
 
 impl Commands {
@@ -67,8 +71,13 @@ impl Commands {
                 args.timerange.try_into_timerange()?;
                 Ok(())
             }
+            Self::Trace(args) => {
+                args.timerange.try_into_timerange()?;
+                Ok(())
+            }
             Self::Streams { command } => command.validate(),
             Self::System { .. } => Ok(()),
+            Self::Fields => Ok(()),
         }
     }
 }
@@ -201,6 +210,13 @@ impl CountByLevelArgs {
             streams: Vec::new(),
         })
     }
+}
+
+#[derive(Debug, Args)]
+pub struct TraceArgs {
+    pub checkout_correlation_id: String,
+    #[command(flatten)]
+    pub timerange: TimerangeArgs,
 }
 
 #[derive(Debug, Subcommand)]

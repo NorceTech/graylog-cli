@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -14,10 +15,11 @@ use crate::domain::error::HttpError;
 use crate::domain::error::ValidationError;
 use crate::domain::models::{
     AggregateCommandInput, AggregateSearchRequest, AggregateSearchResult, AggregateStatus,
-    AuthStatus, CommandMetadata, CommandStatus, ErrorsCommandInput, MessageSearchRequest,
-    MessageSearchResult, MessageSearchStatus, PingStatus, SearchCommandInput, SortDirection,
-    StreamFindStatus, StreamResult, StreamStatus, StreamsResult, StreamsStatus, SystemInfoStatus,
-    SystemResult,
+    AuthStatus, CommandMetadata, CommandStatus, ErrorsCommandInput, FieldsResult, FieldsStatus,
+    MessageSearchRequest, MessageSearchResult, MessageSearchStatus, NormalizedRow, PingStatus,
+    SearchCommandInput, SortDirection, StreamFindStatus, StreamResult, StreamStatus, StreamsResult,
+    StreamsStatus, SystemInfoStatus, SystemResult, TraceCommandInput, TraceEvent, TraceGroup,
+    TraceStatus, TraceSummary,
 };
 
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
@@ -26,6 +28,8 @@ const MAX_STREAM_SEARCH_LIMIT: u64 = 100;
 const DEFAULT_SEARCH_OFFSET: u64 = 0;
 const DEFAULT_SEARCH_SORT: &str = "timestamp";
 const ERRORS_QUERY: &str = "level:<=3";
+const TRACE_DEFAULT_TIME_RANGE: &str = "1h";
+const TRACE_MAX_LIMIT: u64 = 500;
 
 pub trait ConfigStore: Send + Sync {
     fn config_path(&self) -> Result<PathBuf, ConfigError>;
@@ -67,6 +71,10 @@ pub trait GraylogGateway: Send + Sync {
     fn system_info(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<SystemResult, HttpError>> + Send + '_>>;
+
+    fn list_fields(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<FieldsResult, HttpError>> + Send + '_>>;
 }
 
 pub trait GraylogGatewayFactory: Send + Sync {
@@ -334,6 +342,17 @@ impl ApplicationService {
         })
     }
 
+    pub async fn fields(&self) -> Result<FieldsStatus, CliError> {
+        let client = self.graylog_gateway().await?;
+        let result = client.list_fields().await?;
+        Ok(FieldsStatus {
+            ok: true,
+            command: "fields",
+            fields: result.fields.clone(),
+            total: result.fields.len(),
+        })
+    }
+
     pub async fn ping(&self) -> Result<PingStatus, CliError> {
         let client = self.graylog_gateway().await?;
         let graylog_url = client.base_url().to_string();
@@ -345,6 +364,65 @@ impl ApplicationService {
             command: "ping",
             reachable: true,
             graylog_url,
+        })
+    }
+
+    pub async fn trace(&self, input: TraceCommandInput) -> Result<TraceStatus, CliError> {
+        let correlation_id = input.checkout_correlation_id.trim().to_string();
+        if correlation_id.is_empty() {
+            return Err(CliError::Validation(ValidationError::EmptyField {
+                field: "checkout_correlation_id",
+            }));
+        }
+
+        let timerange = match input.timerange {
+            Some(timerange) => timerange,
+            None => crate::domain::timerange::CommandTimerange::from_input(
+                crate::domain::timerange::TimerangeInput {
+                    relative: Some(TRACE_DEFAULT_TIME_RANGE.to_string()),
+                    from: None,
+                    to: None,
+                },
+            )
+            .map_err(CliError::from)?,
+        };
+
+        let request = MessageSearchRequest {
+            query: format!("checkoutCorrelationId:{correlation_id}"),
+            timerange: Some(timerange),
+            fields: vec![
+                "message".to_string(),
+                "source".to_string(),
+                "timestamp".to_string(),
+                "facility".to_string(),
+                "correlationId".to_string(),
+                "level".to_string(),
+            ],
+            limit: TRACE_MAX_LIMIT,
+            offset: 0,
+            sort: "timestamp".to_string(),
+            sort_direction: SortDirection::Asc,
+            streams: vec![],
+        };
+
+        let config = self
+            .config_store
+            .load()
+            .await?
+            .ok_or(CliError::Config(ConfigError::NotConfigured))?;
+        let client = self.graylog_gateway_with_config(config)?;
+        let result = client.search_messages(request).await?;
+
+        let trace_groups = build_trace_groups(&result.messages);
+        let summary = build_trace_summary(&trace_groups);
+
+        Ok(TraceStatus {
+            ok: true,
+            command: "trace",
+            checkout_correlation_id: correlation_id,
+            total_events: result.messages.len(),
+            trace_groups,
+            summary,
         })
     }
 
@@ -502,6 +580,416 @@ impl ApplicationService {
         self.gateway_factory
             .build_from_config(config)
             .map_err(CliError::from)
+    }
+}
+
+fn build_trace_groups(messages: &[NormalizedRow]) -> Vec<TraceGroup> {
+    let mut groups: BTreeMap<String, Vec<&NormalizedRow>> = BTreeMap::new();
+
+    for row in messages {
+        let corr_id = row
+            .get("field: correlationId")
+            .or_else(|| row.get("correlationId"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        groups.entry(corr_id).or_default().push(row);
+    }
+
+    groups
+        .into_iter()
+        .map(|(correlation_id, rows)| {
+            let trigger = rows
+                .first()
+                .and_then(|row| row.get("field: message").or_else(|| row.get("message")))
+                .and_then(|value| value.as_str())
+                .map(extract_trigger)
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let duration_ms = compute_group_duration(&rows);
+            let events = categorize_events(&rows);
+
+            TraceGroup {
+                correlation_id,
+                trigger,
+                duration_ms,
+                events,
+            }
+        })
+        .collect()
+}
+
+fn extract_trigger(message: &str) -> String {
+    if message.starts_with("Request started") {
+        let parts: Vec<&str> = message.splitn(4, '"').collect();
+        if parts.len() >= 4 {
+            let method_path = parts[3].trim().trim_matches('"');
+            return method_path.to_string();
+        }
+    }
+
+    message.chars().take(120).collect()
+}
+
+fn compute_group_duration(rows: &[&NormalizedRow]) -> Option<u64> {
+    let first_ts = rows.first().and_then(|row| {
+        row.get("field: timestamp")
+            .or_else(|| row.get("timestamp"))
+            .and_then(|value| value.as_str())
+    })?;
+    let last_ts = rows.last().and_then(|row| {
+        row.get("field: timestamp")
+            .or_else(|| row.get("timestamp"))
+            .and_then(|value| value.as_str())
+    })?;
+    let first_millis = parse_timestamp_to_millis(first_ts)?;
+    let last_millis = parse_timestamp_to_millis(last_ts)?;
+    Some(last_millis.saturating_sub(first_millis))
+}
+
+fn parse_timestamp_to_millis(ts: &str) -> Option<u64> {
+    let year: u64 = ts.get(0..4)?.parse().ok()?;
+    let month: u64 = ts.get(5..7)?.parse().ok()?;
+    let day: u64 = ts.get(8..10)?.parse().ok()?;
+    let hour: u64 = ts.get(11..13)?.parse().ok()?;
+    let minute: u64 = ts.get(14..16)?.parse().ok()?;
+    let second: u64 = ts.get(17..19)?.parse().ok()?;
+    let millis: u64 = ts
+        .get(20..23)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+
+    let days = (year - 1970) * 365 + (month.saturating_sub(1)) * 31 + day.saturating_sub(1);
+    Some(days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis)
+}
+
+fn categorize_events(rows: &[&NormalizedRow]) -> Vec<TraceEvent> {
+    let mut events = Vec::new();
+    let mut db_count = 0_usize;
+    let mut internal_count = 0_usize;
+
+    for row in rows {
+        let message = row
+            .get("field: message")
+            .or_else(|| row.get("message"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let level = row
+            .get("field: level")
+            .or_else(|| row.get("level"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value as u8);
+        let source = row
+            .get("field: source")
+            .or_else(|| row.get("source"))
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+        let timestamp = row
+            .get("field: timestamp")
+            .or_else(|| row.get("timestamp"))
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+
+        if level.is_some_and(|current_level| current_level <= 3) {
+            events.push(TraceEvent {
+                event_type: "error".to_string(),
+                timestamp,
+                source,
+                level,
+                message: Some(message.to_string()),
+                method: None,
+                target: None,
+                status: None,
+                duration_ms: None,
+                field: None,
+                old: None,
+                new: None,
+                target_adapter: None,
+                path: None,
+                count: None,
+            });
+            continue;
+        }
+
+        if level == Some(4) {
+            events.push(TraceEvent {
+                event_type: "warning".to_string(),
+                timestamp,
+                source,
+                level,
+                message: Some(message.to_string()),
+                method: None,
+                target: None,
+                status: None,
+                duration_ms: None,
+                field: None,
+                old: None,
+                new: None,
+                target_adapter: None,
+                path: None,
+                count: None,
+            });
+            continue;
+        }
+
+        if message.contains("Differences found") || message.contains("Object comparison found") {
+            let diffs = if message.contains("Differences found:") {
+                message
+                    .split_once("Differences found: ")
+                    .map(|(_, diff)| diff)
+                    .unwrap_or("")
+            } else {
+                ""
+            };
+            events.push(TraceEvent {
+                event_type: "state_change".to_string(),
+                timestamp,
+                source,
+                level,
+                message: None,
+                method: None,
+                target: None,
+                status: None,
+                duration_ms: None,
+                field: Some(diffs.chars().take(200).collect()),
+                old: None,
+                new: None,
+                target_adapter: None,
+                path: None,
+                count: None,
+            });
+            continue;
+        }
+
+        if message.contains("HooksHttpClient")
+            && message.contains("Sending HTTP request")
+            && let Some(url) = extract_url_from_message(message)
+        {
+            let adapter = extract_adapter_from_url(&url);
+            let path = extract_path_from_url(&url);
+            events.push(TraceEvent {
+                event_type: "callback".to_string(),
+                timestamp,
+                source,
+                level,
+                message: None,
+                method: None,
+                target: None,
+                status: None,
+                duration_ms: None,
+                field: None,
+                old: None,
+                new: None,
+                target_adapter: adapter,
+                path,
+                count: None,
+            });
+            continue;
+        }
+
+        if message.contains("Sending HTTP request")
+            && let Some(url) = extract_url_from_message(message)
+        {
+            let method = extract_method_from_message(message);
+            events.push(TraceEvent {
+                event_type: "external_call".to_string(),
+                timestamp,
+                source,
+                level,
+                message: None,
+                method,
+                target: Some(url),
+                status: None,
+                duration_ms: None,
+                field: None,
+                old: None,
+                new: None,
+                target_adapter: None,
+                path: None,
+                count: None,
+            });
+            continue;
+        }
+
+        if (message.contains("Received HTTP response after")
+            || message.contains("Received Cosmos DB response after"))
+            && let Some(duration) = extract_duration_from_message(message)
+        {
+            let status = extract_status_from_response(message);
+            if message.contains("Cosmos DB") {
+                db_count += 1;
+            } else {
+                events.push(TraceEvent {
+                    event_type: "external_call_response".to_string(),
+                    timestamp,
+                    source,
+                    level,
+                    message: None,
+                    method: None,
+                    target: None,
+                    status,
+                    duration_ms: Some(duration),
+                    field: None,
+                    old: None,
+                    new: None,
+                    target_adapter: None,
+                    path: None,
+                    count: None,
+                });
+            }
+            continue;
+        }
+
+        if message.starts_with("Request started") || message.starts_with("Request processed") {
+            internal_count += 1;
+            continue;
+        }
+
+        if message.contains("Cosmos DB request") || message.contains("Cosmos DB response") {
+            db_count += 1;
+            continue;
+        }
+
+        internal_count += 1;
+    }
+
+    if db_count > 0 {
+        events.push(TraceEvent {
+            event_type: "db_op".to_string(),
+            timestamp: None,
+            source: None,
+            level: None,
+            message: None,
+            method: None,
+            target: None,
+            status: None,
+            duration_ms: None,
+            field: None,
+            old: None,
+            new: None,
+            target_adapter: None,
+            path: None,
+            count: Some(db_count),
+        });
+    }
+
+    if internal_count > 0 {
+        events.push(TraceEvent {
+            event_type: "internal".to_string(),
+            timestamp: None,
+            source: None,
+            level: None,
+            message: None,
+            method: None,
+            target: None,
+            status: None,
+            duration_ms: None,
+            field: None,
+            old: None,
+            new: None,
+            target_adapter: None,
+            path: None,
+            count: Some(internal_count),
+        });
+    }
+
+    events
+}
+
+fn extract_url_from_message(message: &str) -> Option<String> {
+    for part in message.split_whitespace() {
+        if part.starts_with("http://") || part.starts_with("https://") {
+            return Some(part.trim_matches('"').to_string());
+        }
+    }
+
+    None
+}
+
+fn extract_method_from_message(message: &str) -> Option<String> {
+    for part in message.split('"') {
+        let trimmed = part.trim();
+        if matches!(trimmed, "GET" | "POST" | "PUT" | "PATCH" | "DELETE") {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
+}
+
+fn extract_duration_from_message(message: &str) -> Option<u64> {
+    if let Some(after) = message.split("after ").nth(1) {
+        let num_str: String = after
+            .chars()
+            .take_while(|value| value.is_ascii_digit() || *value == '.')
+            .collect();
+        let duration: f64 = num_str.parse().ok()?;
+        Some(duration as u64)
+    } else {
+        None
+    }
+}
+
+fn extract_status_from_response(message: &str) -> Option<u64> {
+    if message.contains(" BadRequest") {
+        return Some(400);
+    }
+    if message.contains(" NotFound") {
+        return Some(404);
+    }
+    if message.contains(" Conflict") {
+        return Some(409);
+    }
+    if message.contains(" InternalServerError") {
+        return Some(500);
+    }
+    if message.contains(" Created") {
+        return Some(201);
+    }
+    if message.contains(" OK") {
+        return Some(200);
+    }
+    if message.contains(" NoContent") {
+        return Some(204);
+    }
+
+    None
+}
+
+fn extract_adapter_from_url(url: &str) -> Option<String> {
+    let host = url.split("//").nth(1)?.split('.').next()?;
+    Some(host.to_string())
+}
+
+fn extract_path_from_url(url: &str) -> Option<String> {
+    let after_scheme = url.split("//").nth(1)?;
+    let path_start = after_scheme.find('/')?;
+    Some(after_scheme[path_start..].to_string())
+}
+
+fn build_trace_summary(groups: &[TraceGroup]) -> TraceSummary {
+    let mut total_errors = 0_usize;
+    let mut total_external_calls = 0_usize;
+    let mut services = BTreeSet::new();
+
+    for group in groups {
+        for event in &group.events {
+            match event.event_type.as_str() {
+                "error" => total_errors += 1,
+                "external_call" | "external_call_response" => total_external_calls += 1,
+                _ => {}
+            }
+            if let Some(source) = &event.source {
+                let service = source.split('-').next().unwrap_or(source);
+                services.insert(service.to_string());
+            }
+        }
+    }
+
+    TraceSummary {
+        total_errors,
+        total_external_calls,
+        services_involved: services.into_iter().collect(),
     }
 }
 

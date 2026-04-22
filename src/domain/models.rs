@@ -252,3 +252,81 @@ impl AuthStatus {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldsResult {
+    pub fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldsStatus {
+    pub ok: bool,
+    pub command: &'static str,
+    pub fields: Vec<String>,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceCommandInput {
+    pub checkout_correlation_id: String,
+    pub timerange: Option<CommandTimerange>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceStatus {
+    pub ok: bool,
+    pub command: &'static str,
+    pub checkout_correlation_id: String,
+    pub total_events: usize,
+    pub trace_groups: Vec<TraceGroup>,
+    pub summary: TraceSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceGroup {
+    pub correlation_id: String,
+    pub trigger: String,
+    pub duration_ms: Option<u64>,
+    pub events: Vec<TraceEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_adapter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceSummary {
+    pub total_errors: usize,
+    pub total_external_calls: usize,
+    pub services_involved: Vec<String>,
+}

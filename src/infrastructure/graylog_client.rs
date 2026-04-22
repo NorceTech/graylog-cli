@@ -11,7 +11,7 @@ use crate::application::service::{GraylogGateway, GraylogGatewayFactory};
 use crate::domain::config::{GraylogConfig, StoredConfig};
 use crate::domain::error::HttpError;
 use crate::domain::models::{
-    AggregateSearchRequest, AggregateSearchResult, AggregationType, JsonObject,
+    AggregateSearchRequest, AggregateSearchResult, AggregationType, FieldsResult, JsonObject,
     MessageSearchRequest, MessageSearchResult, NormalizedRow, StreamResult, StreamsResult,
     SystemResult,
 };
@@ -22,6 +22,7 @@ const SEARCH_AGGREGATE_PATH: &str = "/api/search/aggregate";
 const STREAMS_PATH: &str = "/api/streams";
 const STREAM_PATH_TEMPLATE: &str = "/api/streams/{id}";
 const SYSTEM_PATH: &str = "/api/system";
+const SYSTEM_FIELDS_PATH: &str = "/api/system/fields";
 const REQUESTED_BY_HEADER: &str = "X-Requested-By";
 const REQUESTED_BY_VALUE: &str = "graylog-cli";
 const DEFAULT_TERMS_LIMIT: u64 = 10;
@@ -165,6 +166,14 @@ impl GraylogClient {
         Ok(SystemResult {
             system: normalize_object_response(response)?,
         })
+    }
+
+    pub async fn list_fields(&self) -> Result<FieldsResult, HttpError> {
+        let response = self
+            .send_json(Method::GET, SYSTEM_FIELDS_PATH, None)
+            .await?;
+        let fields = normalize_fields_response(response)?;
+        Ok(FieldsResult { fields })
     }
 
     fn request(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
@@ -432,6 +441,12 @@ impl GraylogGateway for GraylogClient {
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<SystemResult, HttpError>> + Send + '_>> {
         Box::pin(async move { GraylogClient::system_info(self).await })
+    }
+
+    fn list_fields(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<FieldsResult, HttpError>> + Send + '_>> {
+        Box::pin(async move { GraylogClient::list_fields(self).await })
     }
 }
 
@@ -980,6 +995,27 @@ fn normalize_object_response(value: Value) -> Result<JsonObject, HttpError> {
         Value::Object(object) => Ok(object),
         other => Err(HttpError::Unavailable {
             message: format!("expected JSON object response, got {other}"),
+        }),
+    }
+}
+
+fn normalize_fields_response(value: Value) -> Result<Vec<String>, HttpError> {
+    let mut object = normalize_object_response(value)?;
+    match object.remove("fields") {
+        Some(Value::Array(fields)) => fields
+            .into_iter()
+            .map(|value| match value {
+                Value::String(name) if !name.trim().is_empty() => Ok(name),
+                other => Err(HttpError::Unavailable {
+                    message: format!("expected field name string, got {other}"),
+                }),
+            })
+            .collect(),
+        Some(other) => Err(HttpError::Unavailable {
+            message: format!("expected fields array, got {other}"),
+        }),
+        None => Err(HttpError::Unavailable {
+            message: "expected `fields` key in Graylog response".to_string(),
         }),
     }
 }

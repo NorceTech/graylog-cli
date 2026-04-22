@@ -170,6 +170,54 @@ Inspect Graylog system details.
 graylog-cli system info
 ```
 
+### fields
+
+List all indexed fields available for querying and filtering.
+
+```bash
+graylog-cli fields
+```
+
+Returns every field name that Graylog has indexed across all messages. Use this to discover what fields you can pass to `--field`, use in queries (`field:value`), or aggregate on. No flags required.
+
+Key fields for debugging:
+- `checkoutCorrelationId` — groups all events for a single checkout order
+- `correlationId` — individual request/trace ID
+- `merchant` — merchant identifier (e.g. `ppg`)
+- `environment` — `Production`, `Stage`, etc.
+- `facility` — service/logger category (e.g. `checkout-order`)
+- `level` — numeric log level (0–7)
+- `message` — log message text
+- `Request_Body` / `Response_Body` — full HTTP request/response payloads
+
+### trace
+
+Trace all events for a checkout order, grouped by request correlation ID. Produces a structured timeline with noise collapsed and key events highlighted.
+
+```bash
+graylog-cli trace <CHECKOUT_CORRELATION_ID> [--time-range 2h]
+```
+
+| Flag | Values | Notes |
+|------|--------|-------|
+| `--time-range` | `Ns`, `Nm`, `Nh`, `Nd`, `Nw` | Default: `1h`. Mutually exclusive with `--from`/`--to` |
+| `--from` / `--to` | ISO 8601 timestamps | Absolute range. Both required together |
+
+The output groups events by `correlationId` (individual request traces) and categorizes each event:
+
+| Event type | What it captures |
+|-----------|-----------------|
+| `error` | Log entries with level ≤ 3 (full message shown) |
+| `warning` | Log entries with level 4 (full message shown) |
+| `external_call` | HTTP requests to external APIs (method + target URL) |
+| `external_call_response` | HTTP responses (status code + duration in ms) |
+| `callback` | Hook/callback invocations (target adapter + path) |
+| `state_change` | Object comparison diffs (field changes detected) |
+| `db_op` | Cosmos DB reads/writes (collapsed to count) |
+| `internal` | Request started/processed logs (collapsed to count) |
+
+Each trace group includes the `correlation_id`, a `trigger` (first request path), `duration_ms`, and the categorized `events` array. A `summary` section provides totals for errors, external calls, and services involved.
+
 ### ping
 
 Check that Graylog is reachable and credentials are valid.
@@ -195,6 +243,48 @@ graylog-cli count-by-level --time-range 1h | jq .
 
 # Error distribution by source
 graylog-cli aggregate "level:<=3" --aggregation-type terms --field source --size 20 --time-range 1h | jq .
+
+# Error distribution by merchant
+graylog-cli aggregate "level:<=3" --aggregation-type terms --field merchant --size 20 --time-range 1h | jq .
+```
+
+Then trace specific failing orders:
+
+```bash
+# Get affected order IDs from errors
+graylog-cli search "level:<=3" --field checkoutCorrelationId --limit 50 --time-range 1h | jq '[.messages[]."field: checkoutCorrelationId" | select(. != null)] | unique'
+
+# Trace one of them
+graylog-cli trace omggXmLy --time-range 2h | jq .
+```
+
+### "What fields can I query?"
+
+```bash
+# List all indexed fields
+graylog-cli fields | jq .
+
+# Find correlation-related fields
+graylog-cli fields | jq '.fields[] | select(test("correlation|checkout|merchant|environment"))'
+```
+
+### "Trace a specific order through the system"
+
+```bash
+# Full timeline for an order (default: last 1h)
+graylog-cli trace omggXmLy | jq .
+
+# Wider time range
+graylog-cli trace omggXmLy --time-range 4h | jq .
+
+# Just the errors and the summary
+graylog-cli trace omggXmLy --time-range 2h | jq '{total_events, errors: [.trace_groups[].events[] | select(.type == "error")], summary}'
+
+# Find all correlation IDs for an order
+graylog-cli trace omggXmLy | jq '[.trace_groups[].correlation_id]'
+
+# Show only external calls (API interactions)
+graylog-cli trace omggXmLy | jq '[.trace_groups[].events[] | select(.type == "external_call" or .type == "external_call_response")]'
 ```
 
 ### "Show me all logs for X"

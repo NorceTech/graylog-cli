@@ -1,5 +1,6 @@
 use clap::Parser;
 use graylog_cli::application::service::ApplicationService;
+use graylog_cli::domain::models::TraceCommandInput;
 use graylog_cli::infrastructure::config_store::FileConfigStore;
 use graylog_cli::infrastructure::graylog_client::ReqwestGraylogGatewayFactory;
 use graylog_cli::presentation::cli::{Cli, Commands, StreamsCommands, SystemCommands};
@@ -64,6 +65,17 @@ async fn run(
         Commands::CountByLevel(args) => {
             emit_json_success(&service.count_by_level(args.to_input()?).await?);
         }
+        Commands::Trace(args) => {
+            let timerange = args.timerange.try_into_timerange()?;
+            emit_json_success(
+                &service
+                    .trace(TraceCommandInput {
+                        checkout_correlation_id: args.checkout_correlation_id,
+                        timerange,
+                    })
+                    .await?,
+            );
+        }
         Commands::Streams {
             command: streams_command,
         } => match streams_command {
@@ -95,6 +107,9 @@ async fn run(
                 emit_json_success(&service.system_info().await?);
             }
         },
+        Commands::Fields => {
+            emit_json_success(&service.fields().await?);
+        }
         Commands::Ping => {
             emit_json_success(&service.ping().await?);
         }
