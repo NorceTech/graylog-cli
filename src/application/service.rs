@@ -368,10 +368,17 @@ impl ApplicationService {
     }
 
     pub async fn trace(&self, input: TraceCommandInput) -> Result<TraceStatus, CliError> {
-        let correlation_id = input.checkout_correlation_id.trim().to_string();
-        if correlation_id.is_empty() {
+        let field = input.field.trim().to_string();
+        if field.is_empty() {
             return Err(CliError::Validation(ValidationError::EmptyField {
-                field: "checkout_correlation_id",
+                field: "field",
+            }));
+        }
+
+        let value = input.value.trim().to_string();
+        if value.is_empty() {
+            return Err(CliError::Validation(ValidationError::EmptyField {
+                field: "value",
             }));
         }
 
@@ -388,7 +395,7 @@ impl ApplicationService {
         };
 
         let request = MessageSearchRequest {
-            query: format!("checkoutCorrelationId:{correlation_id}"),
+            query: format!("{field}:{value}"),
             timerange: Some(timerange),
             fields: vec![
                 "message".to_string(),
@@ -419,7 +426,8 @@ impl ApplicationService {
         Ok(TraceStatus {
             ok: true,
             command: "trace",
-            checkout_correlation_id: correlation_id,
+            field,
+            value,
             total_events: result.messages.len(),
             trace_groups,
             summary,

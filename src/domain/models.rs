@@ -268,7 +268,8 @@ pub struct FieldsStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceCommandInput {
-    pub checkout_correlation_id: String,
+    pub field: String,
+    pub value: String,
     pub timerange: Option<CommandTimerange>,
 }
 
@@ -276,7 +277,8 @@ pub struct TraceCommandInput {
 pub struct TraceStatus {
     pub ok: bool,
     pub command: &'static str,
-    pub checkout_correlation_id: String,
+    pub field: String,
+    pub value: String,
     pub total_events: usize,
     pub trace_groups: Vec<TraceGroup>,
     pub summary: TraceSummary,

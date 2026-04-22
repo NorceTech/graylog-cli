@@ -214,7 +214,11 @@ impl CountByLevelArgs {
 
 #[derive(Debug, Args)]
 pub struct TraceArgs {
-    pub checkout_correlation_id: String,
+    /// Value to trace (matched against --field).
+    pub value: String,
+    /// Field to search and group by. Default: checkoutCorrelationId
+    #[arg(long = "field", default_value = "checkoutCorrelationId")]
+    pub field: String,
     #[command(flatten)]
     pub timerange: TimerangeArgs,
 }

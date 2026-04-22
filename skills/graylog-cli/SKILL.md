@@ -192,16 +192,32 @@ Key fields for debugging:
 
 ### trace
 
-Trace all events for a checkout order, grouped by request correlation ID. Produces a structured timeline with noise collapsed and key events highlighted.
+Trace all events matching a field value, grouped by request correlation ID. Produces a structured timeline with noise collapsed and key events highlighted.
 
 ```bash
-graylog-cli trace <CHECKOUT_CORRELATION_ID> [--time-range 2h]
+graylog-cli trace <VALUE> [--field checkoutCorrelationId] [--time-range 2h]
 ```
 
 | Flag | Values | Notes |
 |------|--------|-------|
+| `--field` | Any indexed field name | Default: `checkoutCorrelationId`. Use `graylog-cli fields` to discover available fields |
 | `--time-range` | `Ns`, `Nm`, `Nh`, `Nd`, `Nw` | Default: `1h`. Mutually exclusive with `--from`/`--to` |
 | `--from` / `--to` | ISO 8601 timestamps | Absolute range. Both required together |
+
+Examples:
+```bash
+# Trace a checkout order (default field)
+graylog-cli trace omggXmLy --time-range 2h
+
+# Trace by individual request correlation ID
+graylog-cli trace fe165125-90da-4fbb-bf53-33d6dac6c038 --field correlationId --time-range 2h
+
+# Trace by merchant
+graylog-cli trace ppg --field merchant --time-range 1h
+
+# Trace by basket
+graylog-cli trace 140597614 --field BasketId --time-range 4h
+```
 
 The output groups events by `correlationId` (individual request traces) and categorizes each event:
 
@@ -271,8 +287,11 @@ graylog-cli fields | jq '.fields[] | select(test("correlation|checkout|merchant|
 ### "Trace a specific order through the system"
 
 ```bash
-# Full timeline for an order (default: last 1h)
-graylog-cli trace omggXmLy | jq .
+# Full timeline for a checkout order (default field: checkoutCorrelationId)
+graylog-cli trace omggXmLy --time-range 2h | jq .
+
+# Trace by individual request correlation ID
+graylog-cli trace fe165125-90da-4fbb-bf53-33d6dac6c038 --field correlationId --time-range 2h | jq .
 
 # Wider time range
 graylog-cli trace omggXmLy --time-range 4h | jq .

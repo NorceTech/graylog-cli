@@ -70,7 +70,8 @@ async fn run(
             emit_json_success(
                 &service
                     .trace(TraceCommandInput {
-                        checkout_correlation_id: args.checkout_correlation_id,
+                        field: args.field,
+                        value: args.value,
                         timerange,
                     })
                     .await?,
