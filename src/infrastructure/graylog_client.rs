@@ -6,7 +6,7 @@ use reqwest::{Client, Method};
 use secrecy::ExposeSecret;
 use serde_json::{Map, Value, json};
 
-use crate::application::service::{GraylogGateway, GraylogGatewayFactory};
+use crate::application::ports::{GraylogGateway, GraylogGatewayFactory};
 use crate::domain::config::{GraylogConfig, StoredConfig};
 use crate::domain::error::HttpError;
 use crate::domain::models::{

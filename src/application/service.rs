@@ -7,6 +7,7 @@ use exn::ResultExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 
+use crate::application::ports::{ConfigStore, GraylogGateway, GraylogGatewayFactory};
 use crate::domain::config::{
     DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, GraylogConfig, StoredConfig,
     normalize_url,
@@ -16,58 +17,16 @@ use crate::domain::error::ConfigError;
 use crate::domain::error::HttpError;
 use crate::domain::error::ValidationError;
 use crate::domain::models::{
-    AggregateCommandInput, AggregateSearchRequest, AggregateSearchResult, AggregateStatus,
-    AuthStatus, CommandMetadata, CommandStatus, FieldsResult, FieldsStatus, MessageSearchRequest,
-    MessageSearchResult, MessageSearchStatus, NormalizedRow, PingStatus, SearchCommandInput,
-    SearchGroup, SortDirection, StreamFindStatus, StreamResult, StreamStatus, StreamsResult,
-    StreamsStatus, SystemInfoStatus, SystemResult,
+    AggregateCommandInput, AggregateSearchRequest, AggregateStatus, AuthStatus, CommandMetadata,
+    CommandStatus, FieldsStatus, MessageSearchRequest, MessageSearchStatus, NormalizedRow,
+    PingStatus, SearchCommandInput, SearchGroup, SortDirection, StreamFindStatus, StreamStatus,
+    StreamsStatus, SystemInfoStatus,
 };
 
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
 const MAX_STREAM_SEARCH_LIMIT: u64 = 100;
 const DEFAULT_SEARCH_OFFSET: u64 = 0;
 const DEFAULT_SEARCH_SORT: &str = "timestamp";
-
-#[async_trait]
-pub trait ConfigStore: Send + Sync {
-    fn config_path(&self) -> Result<PathBuf, ConfigError>;
-
-    async fn load(&self) -> Result<Option<GraylogConfig>, ConfigError>;
-
-    async fn save(&self, config: StoredConfig) -> Result<(), ConfigError>;
-}
-
-#[async_trait]
-pub trait GraylogGateway: Send + Sync {
-    fn base_url(&self) -> &str;
-
-    async fn ping(&self) -> Result<(), HttpError>;
-
-    async fn search_messages(
-        &self,
-        request: MessageSearchRequest,
-    ) -> Result<MessageSearchResult, HttpError>;
-
-    async fn search_aggregate(
-        &self,
-        request: AggregateSearchRequest,
-    ) -> Result<AggregateSearchResult, HttpError>;
-
-    async fn list_streams(&self) -> Result<StreamsResult, HttpError>;
-
-    async fn get_stream(&self, stream_id: String) -> Result<StreamResult, HttpError>;
-
-    async fn system_info(&self) -> Result<SystemResult, HttpError>;
-
-    async fn list_fields(&self) -> Result<FieldsResult, HttpError>;
-}
-
-pub trait GraylogGatewayFactory: Send + Sync {
-    fn build_from_config(
-        &self,
-        config: GraylogConfig,
-    ) -> Result<Arc<dyn GraylogGateway>, HttpError>;
-}
 
 #[derive(Clone)]
 pub struct ApplicationService {

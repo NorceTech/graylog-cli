@@ -11,7 +11,7 @@ use config::{Config, File, FileFormat};
 use serde::{Deserialize, Serialize};
 use tokio::task;
 
-use crate::application::service::ConfigStore;
+use crate::application::ports::ConfigStore;
 use crate::domain::config::{GraylogConfig, StoredConfig};
 use crate::domain::error::ConfigError;
 
@@ -48,10 +48,11 @@ impl FileConfigStore {
 
         #[cfg(not(windows))]
         {
-            let home = non_empty_env_path("HOME")?.ok_or_else(|| ConfigError::StoreUnavailable {
-                backend: "filesystem",
-                message: "HOME is not set and XDG_CONFIG_HOME is unavailable".to_string(),
-            })?;
+            let home =
+                non_empty_env_path("HOME")?.ok_or_else(|| ConfigError::StoreUnavailable {
+                    backend: "filesystem",
+                    message: "HOME is not set and XDG_CONFIG_HOME is unavailable".to_string(),
+                })?;
 
             Ok(home.join(".config").join("graylog-cli").join("config.toml"))
         }
