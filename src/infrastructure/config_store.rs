@@ -11,7 +11,7 @@ use config::{Config, File, FileFormat};
 use serde::{Deserialize, Serialize};
 use tokio::task;
 
-use crate::application::ports::ConfigStore;
+use crate::application::ports::{ConfigStore, FieldsCacheStore};
 use crate::domain::config::{GraylogConfig, StoredConfig};
 use crate::domain::error::ConfigError;
 
@@ -122,11 +122,41 @@ impl ConfigStore for FileConfigStore {
     }
 }
 
+#[async_trait]
+impl FieldsCacheStore for FileConfigStore {
+    async fn load_fields(
+        &self,
+        config_path: &Path,
+        ttl_seconds: u64,
+    ) -> Result<Option<Vec<String>>, ConfigError> {
+        let config_path = config_path.to_path_buf();
+
+        task::spawn_blocking(move || Ok(read_fields_cache(&config_path, ttl_seconds)))
+            .await
+            .map_err(|error| ConfigError::StoreUnavailable {
+                backend: "filesystem",
+                message: format!("failed to join fields cache read task: {error}"),
+            })?
+    }
+
+    async fn save_fields(&self, config_path: &Path, fields: &[String]) -> Result<(), ConfigError> {
+        let config_path = config_path.to_path_buf();
+        let fields = fields.to_vec();
+
+        task::spawn_blocking(move || write_fields_cache(&config_path, &fields))
+            .await
+            .map_err(|error| ConfigError::StoreUnavailable {
+                backend: "filesystem",
+                message: format!("failed to join fields cache write task: {error}"),
+            })?
+    }
+}
+
 fn fields_cache_path(config_path: &Path) -> PathBuf {
     config_path.with_file_name("fields_cache.json")
 }
 
-pub fn read_fields_cache(config_path: &Path, ttl_seconds: u64) -> Option<Vec<String>> {
+fn read_fields_cache(config_path: &Path, ttl_seconds: u64) -> Option<Vec<String>> {
     let cache_path = fields_cache_path(config_path);
     let contents = std::fs::read_to_string(&cache_path).ok()?;
     let cache: FieldsCache = serde_json::from_str(&contents).ok()?;
@@ -139,7 +169,7 @@ pub fn read_fields_cache(config_path: &Path, ttl_seconds: u64) -> Option<Vec<Str
     }
 }
 
-pub fn write_fields_cache(config_path: &Path, fields: &[String]) -> Result<(), ConfigError> {
+fn write_fields_cache(config_path: &Path, fields: &[String]) -> Result<(), ConfigError> {
     let cache_path = fields_cache_path(config_path);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

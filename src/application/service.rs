@@ -7,7 +7,9 @@ use exn::ResultExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 
-use crate::application::ports::{ConfigStore, GraylogGateway, GraylogGatewayFactory};
+use crate::application::ports::{
+    ConfigStore, FieldsCacheStore, GraylogGateway, GraylogGatewayFactory,
+};
 use crate::domain::config::{
     DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, GraylogConfig, StoredConfig,
     normalize_url,
@@ -32,6 +34,7 @@ const DEFAULT_SEARCH_SORT: &str = "timestamp";
 pub struct ApplicationService {
     config_store: Arc<dyn ConfigStore>,
     gateway_factory: Arc<dyn GraylogGatewayFactory>,
+    fields_cache_store: Arc<dyn FieldsCacheStore>,
 }
 
 impl Default for ApplicationService {
@@ -45,20 +48,33 @@ impl ApplicationService {
         Self::with_dependencies(
             Arc::new(UnconfiguredConfigStore),
             Arc::new(UnconfiguredGraylogGatewayFactory),
+            Arc::new(UnconfiguredFieldsCacheStore),
         )
     }
 
-    pub fn with_config_store(config_store: Arc<dyn ConfigStore>) -> Self {
-        Self::with_dependencies(config_store, Arc::new(UnconfiguredGraylogGatewayFactory))
+    pub fn with_config_store<T>(config_store: Arc<T>) -> Self
+    where
+        T: ConfigStore + FieldsCacheStore + 'static,
+    {
+        let fields_cache_store: Arc<dyn FieldsCacheStore> = config_store.clone();
+        let config_store: Arc<dyn ConfigStore> = config_store;
+
+        Self::with_dependencies(
+            config_store,
+            Arc::new(UnconfiguredGraylogGatewayFactory),
+            fields_cache_store,
+        )
     }
 
     pub fn with_dependencies(
         config_store: Arc<dyn ConfigStore>,
         gateway_factory: Arc<dyn GraylogGatewayFactory>,
+        fields_cache_store: Arc<dyn FieldsCacheStore>,
     ) -> Self {
         Self {
             config_store,
             gateway_factory,
+            fields_cache_store,
         }
     }
 
@@ -159,27 +175,29 @@ impl ApplicationService {
             let config_path = self.config_store.config_path()?;
             let ttl = config.fields_cache_ttl_seconds;
 
-            let fields =
-                match crate::infrastructure::config_store::read_fields_cache(&config_path, ttl) {
-                    Some(fields) => fields,
-                    None => {
-                        let client = self.graylog_gateway_with_config(config)?;
-                        let result = client.list_fields().await?;
-                        crate::infrastructure::config_store::write_fields_cache(
-                            &config_path,
-                            &result.fields,
-                        )?;
-                        result.fields
-                    }
-                };
+            let fields = match self
+                .fields_cache_store
+                .load_fields(&config_path, ttl)
+                .await?
+            {
+                Some(fields) => fields,
+                None => {
+                    let client = self.graylog_gateway_with_config(config)?;
+                    let result = client.list_fields().await?;
+                    self.fields_cache_store
+                        .save_fields(&config_path, &result.fields)
+                        .await?;
+                    result.fields
+                }
+            };
 
             input.fields = fields;
         }
 
-        if let Some(ref group_by) = input.group_by {
-            if !input.fields.contains(group_by) {
-                input.fields.push(group_by.clone());
-            }
+        if let Some(ref group_by) = input.group_by
+            && !input.fields.contains(group_by)
+        {
+            input.fields.push(group_by.clone());
         }
 
         let group_by = input.group_by.clone();
@@ -617,6 +635,7 @@ fn parse_timestamp_to_millis(ts: &str) -> Option<u64> {
 
 struct UnconfiguredConfigStore;
 struct UnconfiguredGraylogGatewayFactory;
+struct UnconfiguredFieldsCacheStore;
 
 #[async_trait]
 impl ConfigStore for UnconfiguredConfigStore {
@@ -650,6 +669,31 @@ impl GraylogGatewayFactory for UnconfiguredGraylogGatewayFactory {
         Err(HttpError::RequestBuild {
             message: "no Graylog gateway factory has been attached to ApplicationService"
                 .to_string(),
+        })
+    }
+}
+
+#[async_trait]
+impl FieldsCacheStore for UnconfiguredFieldsCacheStore {
+    async fn load_fields(
+        &self,
+        _config_path: &std::path::Path,
+        _ttl_seconds: u64,
+    ) -> Result<Option<Vec<String>>, ConfigError> {
+        Err(ConfigError::StoreUnavailable {
+            backend: "unconfigured",
+            message: "no fields cache store has been attached to ApplicationService".to_string(),
+        })
+    }
+
+    async fn save_fields(
+        &self,
+        _config_path: &std::path::Path,
+        _fields: &[String],
+    ) -> Result<(), ConfigError> {
+        Err(ConfigError::StoreUnavailable {
+            backend: "unconfigured",
+            message: "no fields cache store has been attached to ApplicationService".to_string(),
         })
     }
 }

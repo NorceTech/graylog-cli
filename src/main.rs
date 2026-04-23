@@ -20,9 +20,11 @@ async fn main() {
         emit_cli_error(&error);
     }
 
+    let config_store = Arc::new(FileConfigStore::new());
     let service = ApplicationService::with_dependencies(
-        Arc::new(FileConfigStore::new()),
+        config_store.clone(),
         Arc::new(ReqwestGraylogGatewayFactory),
+        config_store,
     );
 
     if let Err(error) = run(cli.command, &service).await {

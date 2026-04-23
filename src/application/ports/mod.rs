@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,6 +17,17 @@ pub trait ConfigStore: Send + Sync {
     async fn load(&self) -> Result<Option<GraylogConfig>, ConfigError>;
 
     async fn save(&self, config: StoredConfig) -> Result<(), ConfigError>;
+}
+
+#[async_trait]
+pub trait FieldsCacheStore: Send + Sync {
+    async fn load_fields(
+        &self,
+        config_path: &Path,
+        ttl_seconds: u64,
+    ) -> Result<Option<Vec<String>>, ConfigError>;
+
+    async fn save_fields(&self, config_path: &Path, fields: &[String]) -> Result<(), ConfigError>;
 }
 
 #[async_trait]
