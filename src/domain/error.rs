@@ -8,8 +8,6 @@ pub enum CliError {
     Http(#[from] HttpError),
     #[error("validation error: {0}")]
     Validation(#[from] ValidationError),
-    #[error("command `{command}` failed")]
-    CommandFailed { command: String },
 }
 
 #[derive(Debug, Error)]
@@ -21,8 +19,6 @@ pub enum ConfigError {
     },
     #[error("config is not initialized")]
     NotConfigured,
-    #[error("config placeholder: {message}")]
-    Placeholder { message: String },
     #[error("invalid config format: {message}")]
     InvalidFormat { message: String },
     #[error("failed to serialize config: {message}")]
@@ -43,8 +39,6 @@ pub enum HttpError {
     RequestBuild { message: String },
     #[error("transport failure while calling Graylog: {message}")]
     Transport { message: String },
-    #[error("graylog client placeholder: {message}")]
-    Placeholder { message: String },
     #[error("Graylog returned HTTP {status}: {message}")]
     UnexpectedStatus { status: u16, message: String },
     #[error("graylog endpoint is unavailable: {message}")]

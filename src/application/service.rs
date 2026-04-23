@@ -44,6 +44,10 @@ impl Default for ApplicationService {
 }
 
 impl ApplicationService {
+    fn not_configured_error() -> CliError {
+        CliError::Config(ConfigError::NotConfigured)
+    }
+
     pub fn new() -> Self {
         Self::with_dependencies(
             Arc::new(UnconfiguredConfigStore),
@@ -81,16 +85,14 @@ impl ApplicationService {
     pub async fn placeholder_success(
         &self,
         command: &'static str,
-    ) -> Result<CommandStatus, CliError> {
-        Self::validate_command_name(command).map_err(|_| CliError::CommandFailed {
-            command: command.to_string(),
-        })?;
+    ) -> exn::Result<CommandStatus, CliError> {
+        Self::validate_command_name(command).map_err(CliError::from)?;
 
         let configured = self
             .config_store
             .load()
             .await
-            .map_err(|_| {
+            .or_raise(|| {
                 CliError::Config(ConfigError::StoreUnavailable {
                     backend: "config-store",
                     message: "failed to load runtime config".to_string(),
@@ -114,9 +116,10 @@ impl ApplicationService {
     }
 
     pub async fn require_config(&self) -> exn::Result<GraylogConfig, CliError> {
-        self.load_config()
+        Ok(self
+            .load_config()
             .await?
-            .ok_or_else(|| CliError::Config(ConfigError::NotConfigured).into())
+            .ok_or_else(Self::not_configured_error)?)
     }
 
     pub async fn save_config(&self, config: StoredConfig) -> exn::Result<(), CliError> {
@@ -132,14 +135,15 @@ impl ApplicationService {
         &self,
         base_url: String,
         token: SecretString,
-    ) -> Result<AuthStatus, CliError> {
-        let normalized_url = normalize_url(base_url)?;
+    ) -> exn::Result<AuthStatus, CliError> {
+        let normalized_url = normalize_url(base_url).map_err(CliError::from)?;
         let trimmed_token = token.expose_secret().trim().to_owned();
 
         if trimmed_token.is_empty() {
             return Err(CliError::Validation(ValidationError::EmptyField {
                 field: "graylog.token",
-            }));
+            })
+            .into());
         }
 
         let runtime_config = GraylogConfig::new(
@@ -148,14 +152,25 @@ impl ApplicationService {
             DEFAULT_TIMEOUT_SECONDS,
             true,
             DEFAULT_FIELDS_CACHE_TTL_SECONDS,
-        )?;
+        )
+        .map_err(CliError::from)?;
 
-        let config_path = self.config_store.config_path().map_err(CliError::from)?;
+        let config_path = self.config_store.config_path().or_raise(|| {
+            CliError::Config(ConfigError::StoreUnavailable {
+                backend: "config-store",
+                message: "failed to resolve config path".to_string(),
+            })
+        })?;
 
         self.config_store
             .save(runtime_config.to_stored())
             .await
-            .map_err(CliError::from)?;
+            .or_raise(|| {
+                CliError::Config(ConfigError::StoreUnavailable {
+                    backend: "config-store",
+                    message: "failed to persist config".to_string(),
+                })
+            })?;
 
         Ok(AuthStatus::ok(
             config_path.display().to_string(),
@@ -163,30 +178,59 @@ impl ApplicationService {
         ))
     }
 
-    pub async fn search(&self, input: SearchCommandInput) -> Result<MessageSearchStatus, CliError> {
+    pub async fn search(
+        &self,
+        input: SearchCommandInput,
+    ) -> exn::Result<MessageSearchStatus, CliError> {
         let mut input = input;
 
         if input.all_fields && input.fields.is_empty() {
             let config = self
                 .config_store
                 .load()
-                .await?
-                .ok_or(CliError::Config(ConfigError::NotConfigured))?;
-            let config_path = self.config_store.config_path()?;
+                .await
+                .or_raise(|| {
+                    CliError::Config(ConfigError::StoreUnavailable {
+                        backend: "config-store",
+                        message: "failed to load runtime config".to_string(),
+                    })
+                })?
+                .ok_or_else(Self::not_configured_error)?;
+            let config_path = self.config_store.config_path().or_raise(|| {
+                CliError::Config(ConfigError::StoreUnavailable {
+                    backend: "config-store",
+                    message: "failed to resolve config path".to_string(),
+                })
+            })?;
             let ttl = config.fields_cache_ttl_seconds;
 
             let fields = match self
                 .fields_cache_store
                 .load_fields(&config_path, ttl)
-                .await?
-            {
+                .await
+                .or_raise(|| {
+                    CliError::Config(ConfigError::StoreUnavailable {
+                        backend: "fields-cache",
+                        message: "failed to load cached fields".to_string(),
+                    })
+                })? {
                 Some(fields) => fields,
                 None => {
                     let client = self.graylog_gateway_with_config(config)?;
-                    let result = client.list_fields().await?;
+                    let result = client.list_fields().await.or_raise(|| {
+                        CliError::Http(HttpError::Unavailable {
+                            message: "failed to list fields".to_string(),
+                        })
+                    })?;
                     self.fields_cache_store
                         .save_fields(&config_path, &result.fields)
-                        .await?;
+                        .await
+                        .or_raise(|| {
+                            CliError::Config(ConfigError::StoreUnavailable {
+                                backend: "fields-cache",
+                                message: "failed to cache fields".to_string(),
+                            })
+                        })?;
                     result.fields
                 }
             };
@@ -221,7 +265,7 @@ impl ApplicationService {
     pub async fn aggregate(
         &self,
         input: AggregateCommandInput,
-    ) -> Result<AggregateStatus, CliError> {
+    ) -> exn::Result<AggregateStatus, CliError> {
         self.execute_aggregate("aggregate", self.build_aggregate_request(input))
             .await
     }
@@ -229,14 +273,18 @@ impl ApplicationService {
     pub async fn count_by_level(
         &self,
         input: AggregateCommandInput,
-    ) -> Result<AggregateStatus, CliError> {
+    ) -> exn::Result<AggregateStatus, CliError> {
         self.execute_aggregate("count-by-level", self.build_aggregate_request(input))
             .await
     }
 
-    pub async fn streams_list(&self) -> Result<StreamsStatus, CliError> {
+    pub async fn streams_list(&self) -> exn::Result<StreamsStatus, CliError> {
         let client = self.graylog_gateway().await?;
-        let result = client.list_streams().await?;
+        let result = client.list_streams().await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: "failed to list streams".to_string(),
+            })
+        })?;
 
         Ok(StreamsStatus {
             ok: true,
@@ -245,9 +293,16 @@ impl ApplicationService {
         })
     }
 
-    pub async fn streams_show(&self, stream_id: &str) -> Result<StreamStatus, CliError> {
+    pub async fn streams_show(&self, stream_id: &str) -> exn::Result<StreamStatus, CliError> {
         let client = self.graylog_gateway().await?;
-        let result = client.get_stream(stream_id.to_string()).await?;
+        let result = client
+            .get_stream(stream_id.to_string())
+            .await
+            .or_raise(|| {
+                CliError::Http(HttpError::Unavailable {
+                    message: format!("failed to get stream `{stream_id}`"),
+                })
+            })?;
 
         Ok(StreamStatus {
             ok: true,
@@ -256,17 +311,19 @@ impl ApplicationService {
         })
     }
 
-    pub async fn streams_find(&self, name: &str) -> Result<StreamFindStatus, CliError> {
+    pub async fn streams_find(&self, name: &str) -> exn::Result<StreamFindStatus, CliError> {
         let name = name.trim();
 
         if name.is_empty() {
-            return Err(CliError::Validation(ValidationError::EmptyField {
-                field: "name",
-            }));
+            return Err(CliError::Validation(ValidationError::EmptyField { field: "name" }).into());
         }
 
         let client = self.graylog_gateway().await?;
-        let result = client.list_streams().await?;
+        let result = client.list_streams().await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: "failed to list streams".to_string(),
+            })
+        })?;
         let needle = name.to_lowercase();
         let streams = result
             .streams
@@ -293,7 +350,7 @@ impl ApplicationService {
     pub async fn streams_search(
         &self,
         input: SearchCommandInput,
-    ) -> Result<MessageSearchStatus, CliError> {
+    ) -> exn::Result<MessageSearchStatus, CliError> {
         let request = self.build_stream_search_request(input)?;
         self.execute_stream_message_search("streams.search", request)
             .await
@@ -303,7 +360,7 @@ impl ApplicationService {
         &self,
         stream_id: String,
         timerange: Option<crate::domain::timerange::CommandTimerange>,
-    ) -> Result<MessageSearchStatus, CliError> {
+    ) -> exn::Result<MessageSearchStatus, CliError> {
         let request = self.build_stream_search_request(SearchCommandInput {
             query: "*".to_string(),
             timerange,
@@ -322,9 +379,13 @@ impl ApplicationService {
             .await
     }
 
-    pub async fn system_info(&self) -> Result<SystemInfoStatus, CliError> {
+    pub async fn system_info(&self) -> exn::Result<SystemInfoStatus, CliError> {
         let client = self.graylog_gateway().await?;
-        let result = client.system_info().await?;
+        let result = client.system_info().await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: "failed to get system info".to_string(),
+            })
+        })?;
 
         Ok(SystemInfoStatus {
             ok: true,
@@ -333,9 +394,13 @@ impl ApplicationService {
         })
     }
 
-    pub async fn fields(&self) -> Result<FieldsStatus, CliError> {
+    pub async fn fields(&self) -> exn::Result<FieldsStatus, CliError> {
         let client = self.graylog_gateway().await?;
-        let result = client.list_fields().await?;
+        let result = client.list_fields().await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: "failed to list fields".to_string(),
+            })
+        })?;
         Ok(FieldsStatus {
             ok: true,
             command: "fields",
@@ -344,11 +409,15 @@ impl ApplicationService {
         })
     }
 
-    pub async fn ping(&self) -> Result<PingStatus, CliError> {
+    pub async fn ping(&self) -> exn::Result<PingStatus, CliError> {
         let client = self.graylog_gateway().await?;
         let graylog_url = client.base_url().to_string();
 
-        client.ping().await?;
+        client.ping().await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: "Graylog is unreachable".to_string(),
+            })
+        })?;
 
         Ok(PingStatus {
             ok: true,
@@ -400,12 +469,13 @@ impl ApplicationService {
     fn build_stream_search_request(
         &self,
         input: SearchCommandInput,
-    ) -> Result<MessageSearchRequest, CliError> {
+    ) -> exn::Result<MessageSearchRequest, CliError> {
         if input.streams.len() != 1 {
             return Err(CliError::Validation(ValidationError::InvalidValue {
                 field: "stream_id",
                 message: "exactly one stream id is required".to_string(),
-            }));
+            })
+            .into());
         }
 
         let mut request = self.build_search_request(input, DEFAULT_SEARCH_LIMIT);
@@ -420,14 +490,24 @@ impl ApplicationService {
         &self,
         command: &'static str,
         request: MessageSearchRequest,
-    ) -> Result<MessageSearchStatus, CliError> {
+    ) -> exn::Result<MessageSearchStatus, CliError> {
         let config = self
             .config_store
             .load()
-            .await?
-            .ok_or(CliError::Config(ConfigError::NotConfigured))?;
+            .await
+            .or_raise(|| {
+                CliError::Config(ConfigError::StoreUnavailable {
+                    backend: "config-store",
+                    message: "failed to load runtime config".to_string(),
+                })
+            })?
+            .ok_or_else(Self::not_configured_error)?;
         let client = self.graylog_gateway_with_config(config)?;
-        let result = client.search_messages(request.clone()).await?;
+        let result = client.search_messages(request.clone()).await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: "message search failed".to_string(),
+            })
+        })?;
         let mut metadata = result.metadata;
 
         if let Some(total_results) = result.total_results {
@@ -449,12 +529,18 @@ impl ApplicationService {
     async fn execute_paginated_search(
         &self,
         input: &SearchCommandInput,
-    ) -> Result<MessageSearchStatus, CliError> {
+    ) -> exn::Result<MessageSearchStatus, CliError> {
         let config = self
             .config_store
             .load()
-            .await?
-            .ok_or(CliError::Config(ConfigError::NotConfigured))?;
+            .await
+            .or_raise(|| {
+                CliError::Config(ConfigError::StoreUnavailable {
+                    backend: "config-store",
+                    message: "failed to load runtime config".to_string(),
+                })
+            })?
+            .ok_or_else(Self::not_configured_error)?;
         let client = self.graylog_gateway_with_config(config)?;
         let mut request = self.build_search_request(input.clone(), DEFAULT_SEARCH_LIMIT);
         let mut all_messages = Vec::new();
@@ -465,7 +551,11 @@ impl ApplicationService {
         request.offset = 0;
 
         loop {
-            let result = client.search_messages(request.clone()).await?;
+            let result = client.search_messages(request.clone()).await.or_raise(|| {
+                CliError::Http(HttpError::Unavailable {
+                    message: "message search failed".to_string(),
+                })
+            })?;
 
             if metadata.is_empty() {
                 metadata = result.metadata.clone();
@@ -508,14 +598,22 @@ impl ApplicationService {
         &self,
         command: &'static str,
         request: MessageSearchRequest,
-    ) -> Result<MessageSearchStatus, CliError> {
+    ) -> exn::Result<MessageSearchStatus, CliError> {
         let client = self.graylog_gateway().await?;
 
         if let Some(stream_id) = request.streams.first() {
-            client.get_stream(stream_id.clone()).await?;
+            client.get_stream(stream_id.clone()).await.or_raise(|| {
+                CliError::Http(HttpError::Unavailable {
+                    message: format!("failed to get stream `{stream_id}`"),
+                })
+            })?;
         }
 
-        let result = client.search_messages(request.clone()).await?;
+        let result = client.search_messages(request.clone()).await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: "message search failed".to_string(),
+            })
+        })?;
         let mut metadata = result.metadata;
 
         if let Some(total_results) = result.total_results {
@@ -538,15 +636,25 @@ impl ApplicationService {
         &self,
         command: &'static str,
         request: AggregateSearchRequest,
-    ) -> Result<AggregateStatus, CliError> {
+    ) -> exn::Result<AggregateStatus, CliError> {
         let config = self
             .config_store
             .load()
-            .await?
-            .ok_or(CliError::Config(ConfigError::NotConfigured))?;
+            .await
+            .or_raise(|| {
+                CliError::Config(ConfigError::StoreUnavailable {
+                    backend: "config-store",
+                    message: "failed to load runtime config".to_string(),
+                })
+            })?
+            .ok_or_else(Self::not_configured_error)?;
         let client = self.graylog_gateway_with_config(config)?;
         let aggregation_type = request.aggregation_type.as_cli_value();
-        let result = client.search_aggregate(request).await?;
+        let result = client.search_aggregate(request).await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: "aggregate search failed".to_string(),
+            })
+        })?;
 
         Ok(AggregateStatus {
             ok: true,
@@ -557,12 +665,18 @@ impl ApplicationService {
         })
     }
 
-    async fn graylog_gateway(&self) -> Result<Arc<dyn GraylogGateway>, CliError> {
+    async fn graylog_gateway(&self) -> exn::Result<Arc<dyn GraylogGateway>, CliError> {
         let config = self
             .config_store
             .load()
-            .await?
-            .ok_or(CliError::Config(ConfigError::NotConfigured))?;
+            .await
+            .or_raise(|| {
+                CliError::Config(ConfigError::StoreUnavailable {
+                    backend: "config-store",
+                    message: "failed to load runtime config".to_string(),
+                })
+            })?
+            .ok_or_else(Self::not_configured_error)?;
 
         self.graylog_gateway_with_config(config)
     }
@@ -570,10 +684,12 @@ impl ApplicationService {
     fn graylog_gateway_with_config(
         &self,
         config: GraylogConfig,
-    ) -> Result<Arc<dyn GraylogGateway>, CliError> {
-        self.gateway_factory
-            .build_from_config(config)
-            .map_err(CliError::from)
+    ) -> exn::Result<Arc<dyn GraylogGateway>, CliError> {
+        self.gateway_factory.build_from_config(config).or_raise(|| {
+            CliError::Http(HttpError::RequestBuild {
+                message: "failed to build Graylog client from config".to_string(),
+            })
+        })
     }
 }
 

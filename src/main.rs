@@ -1,5 +1,6 @@
 use clap::Parser;
 use graylog_cli::application::service::ApplicationService;
+use graylog_cli::domain::error::CliError;
 use graylog_cli::infrastructure::config_store::FileConfigStore;
 use graylog_cli::infrastructure::graylog_client::ReqwestGraylogGatewayFactory;
 use graylog_cli::presentation::cli::{Cli, Commands, StreamsCommands, SystemCommands};
@@ -17,7 +18,7 @@ async fn main() {
     };
 
     if let Err(error) = cli.validate() {
-        emit_cli_error(&error);
+        emit_cli_error(&error.into());
     }
 
     let config_store = Arc::new(FileConfigStore::new());
@@ -46,7 +47,7 @@ fn parse_cli() -> Result<Cli, i32> {
 async fn run(
     command: Commands,
     service: &ApplicationService,
-) -> Result<(), graylog_cli::domain::error::CliError> {
+) -> Result<(), exn::Exn<graylog_cli::domain::error::CliError>> {
     match command {
         Commands::Auth(args) => {
             let status = service
@@ -55,13 +56,25 @@ async fn run(
             emit_json_success(&status);
         }
         Commands::Search(args) => {
-            emit_json_success(&service.search(args.to_input()?).await?);
+            emit_json_success(
+                &service
+                    .search(args.to_input().map_err(CliError::from)?)
+                    .await?,
+            );
         }
         Commands::Aggregate(args) => {
-            emit_json_success(&service.aggregate(args.to_input()?).await?);
+            emit_json_success(
+                &service
+                    .aggregate(args.to_input().map_err(CliError::from)?)
+                    .await?,
+            );
         }
         Commands::CountByLevel(args) => {
-            emit_json_success(&service.count_by_level(args.to_input()?).await?);
+            emit_json_success(
+                &service
+                    .count_by_level(args.to_input().map_err(CliError::from)?)
+                    .await?,
+            );
         }
         Commands::Streams {
             command: streams_command,
@@ -76,10 +89,14 @@ async fn run(
                 emit_json_success(&service.streams_find(&args.name).await?);
             }
             StreamsCommands::Search(args) => {
-                emit_json_success(&service.streams_search(args.to_input()?).await?);
+                emit_json_success(
+                    &service
+                        .streams_search(args.to_input().map_err(CliError::from)?)
+                        .await?,
+                );
             }
             StreamsCommands::LastEvent(args) => {
-                let timerange = args.timerange()?;
+                let timerange = args.timerange().map_err(CliError::from)?;
                 emit_json_success(
                     &service
                         .streams_last_event(args.stream_id, timerange)
@@ -115,8 +132,9 @@ where
     }
 }
 
-fn emit_cli_error(error: &graylog_cli::domain::error::CliError) -> ! {
-    let exit_code = exit_code_for_cli_error(error);
-    let _ = print_error_json(&ErrorEnvelope::from_cli_error(error));
+fn emit_cli_error(error: &exn::Exn<graylog_cli::domain::error::CliError>) -> ! {
+    let cli_error: &graylog_cli::domain::error::CliError = error;
+    let exit_code = exit_code_for_cli_error(cli_error);
+    let _ = print_error_json(&ErrorEnvelope::from_cli_error(cli_error));
     std::process::exit(exit_code);
 }

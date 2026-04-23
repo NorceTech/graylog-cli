@@ -65,7 +65,6 @@ pub fn exit_code_for_cli_error(error: &CliError) -> i32 {
     match error {
         CliError::Validation(_) | CliError::Config(_) => 2,
         CliError::Http(http_error) => exit_code_for_http_error(http_error),
-        CliError::CommandFailed { .. } => 1,
     }
 }
 
@@ -76,7 +75,7 @@ fn exit_code_for_http_error(error: &HttpError) -> i32 {
         HttpError::UnexpectedStatus { status, .. } if matches!(*status, 401 | 403) => 3,
         HttpError::UnexpectedStatus { status, .. } if matches!(*status, 404 | 405 | 501) => 4,
         HttpError::UnexpectedStatus { .. } => 1,
-        HttpError::RequestBuild { .. } | HttpError::Placeholder { .. } => 1,
+        HttpError::RequestBuild { .. } => 1,
     }
 }
 
@@ -85,7 +84,6 @@ fn error_kind_for_cli_error(error: &CliError) -> &'static str {
         CliError::Validation(_) => "validation_error",
         CliError::Config(config_error) => error_kind_for_config_error(config_error),
         CliError::Http(http_error) => error_kind_for_http_error(http_error),
-        CliError::CommandFailed { .. } => "internal_error",
     }
 }
 
@@ -94,8 +92,7 @@ fn error_kind_for_config_error(error: &ConfigError) -> &'static str {
         ConfigError::NotConfigured
         | ConfigError::InvalidFormat { .. }
         | ConfigError::Serialization { .. }
-        | ConfigError::Deserialization { .. }
-        | ConfigError::Placeholder { .. } => "config_error",
+        | ConfigError::Deserialization { .. } => "config_error",
         ConfigError::StoreUnavailable { .. } | ConfigError::Filesystem { .. } => "internal_error",
     }
 }
@@ -111,7 +108,7 @@ fn error_kind_for_http_error(error: &HttpError) -> &'static str {
             "not_found"
         }
         HttpError::UnexpectedStatus { .. } => "http_error",
-        HttpError::RequestBuild { .. } | HttpError::Placeholder { .. } => "internal_error",
+        HttpError::RequestBuild { .. } => "internal_error",
     }
 }
 
@@ -119,7 +116,7 @@ fn safe_cli_error_message(error: &CliError) -> String {
     match error {
         CliError::Config(config_error) => safe_config_error_message(config_error),
         CliError::Http(http_error) => safe_http_error_message(http_error),
-        CliError::Validation(_) | CliError::CommandFailed { .. } => error.to_string(),
+        CliError::Validation(_) => error.to_string(),
     }
 }
 
@@ -130,9 +127,7 @@ fn safe_config_error_message(error: &ConfigError) -> String {
             "configuration file is invalid".to_string()
         }
         ConfigError::Serialization { .. } => "failed to serialize configuration file".to_string(),
-        ConfigError::StoreUnavailable { .. }
-        | ConfigError::Filesystem { .. }
-        | ConfigError::Placeholder { .. } => error.to_string(),
+        ConfigError::StoreUnavailable { .. } | ConfigError::Filesystem { .. } => error.to_string(),
     }
 }
 
@@ -141,7 +136,6 @@ fn safe_http_error_message(error: &HttpError) -> String {
         HttpError::Transport { message }
         | HttpError::Unavailable { message }
         | HttpError::RequestBuild { message }
-        | HttpError::Placeholder { message }
         | HttpError::UnexpectedStatus { message, .. } => message.clone(),
     }
 }
