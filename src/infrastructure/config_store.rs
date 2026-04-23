@@ -1,4 +1,3 @@
-use std::env;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
@@ -31,42 +30,12 @@ impl FileConfigStore {
     }
 
     fn config_path_impl() -> Result<PathBuf, ConfigError> {
-        if let Some(path) = non_empty_env_path("XDG_CONFIG_HOME")? {
-            return Ok(path.join("graylog-cli").join("config.toml"));
-        }
-
-        #[cfg(windows)]
-        {
-            let appdata =
-                non_empty_env_path("APPDATA")?.ok_or_else(|| ConfigError::StoreUnavailable {
-                    backend: "filesystem",
-                    message: "APPDATA is not set and XDG_CONFIG_HOME is unavailable".to_string(),
-                })?;
-
-            return Ok(appdata.join("graylog-cli").join("config.toml"));
-        }
-
-        #[cfg(not(windows))]
-        {
-            let home =
-                non_empty_env_path("HOME")?.ok_or_else(|| ConfigError::StoreUnavailable {
-                    backend: "filesystem",
-                    message: "HOME is not set and XDG_CONFIG_HOME is unavailable".to_string(),
-                })?;
-
-            Ok(home.join(".config").join("graylog-cli").join("config.toml"))
-        }
-    }
-}
-
-fn non_empty_env_path(name: &'static str) -> Result<Option<PathBuf>, ConfigError> {
-    match env::var_os(name) {
-        Some(value) if value.is_empty() => Err(ConfigError::StoreUnavailable {
-            backend: "filesystem",
-            message: format!("{name} is set but empty"),
-        }),
-        Some(value) => Ok(Some(PathBuf::from(value))),
-        None => Ok(None),
+        dirs::config_dir()
+            .ok_or_else(|| ConfigError::StoreUnavailable {
+                backend: "filesystem",
+                message: "could not determine config directory".to_string(),
+            })
+            .map(|dir| dir.join("graylog-cli").join("config.toml"))
     }
 }
 
@@ -191,6 +160,9 @@ fn write_fields_cache(config_path: &Path, fields: &[String]) -> Result<(), Confi
 }
 
 fn write_config_atomically(config_path: &Path, serialized: &str) -> Result<(), ConfigError> {
+    use std::io::Write as _;
+    use tempfile::NamedTempFile;
+
     let config_dir = config_path
         .parent()
         .ok_or_else(|| ConfigError::StoreUnavailable {
@@ -209,47 +181,32 @@ fn write_config_atomically(config_path: &Path, serialized: &str) -> Result<(), C
 
     set_directory_permissions(config_dir)?;
 
-    let temp_path = temporary_config_path(config_path);
-    let temp_file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&temp_path)
-        .map_err(|error| ConfigError::Filesystem {
+    // tempfile::NamedTempFile::new_in creates files with mode 0o600 on Unix by default.
+    let mut temp_file =
+        NamedTempFile::new_in(config_dir).map_err(|error| ConfigError::Filesystem {
             operation: "creating temporary file",
-            path: temp_path.display().to_string(),
+            path: config_dir.display().to_string(),
             message: error.to_string(),
         })?;
 
-    set_file_permissions(&temp_path, &temp_file)?;
-
-    let mut temp_file = temp_file;
-    use std::io::Write as _;
     temp_file
         .write_all(serialized.as_bytes())
-        .and_then(|_| temp_file.sync_all())
+        .and_then(|_| temp_file.as_file().sync_all())
         .map_err(|error| ConfigError::Filesystem {
             operation: "writing temporary file",
-            path: temp_path.display().to_string(),
+            path: temp_file.path().display().to_string(),
             message: error.to_string(),
         })?;
 
-    std::fs::rename(&temp_path, config_path).map_err(|error| ConfigError::Filesystem {
-        operation: "replacing config file",
-        path: config_path.display().to_string(),
-        message: error.to_string(),
-    })?;
+    temp_file
+        .persist(config_path)
+        .map_err(|error| ConfigError::Filesystem {
+            operation: "replacing config file",
+            path: config_path.display().to_string(),
+            message: error.error.to_string(),
+        })?;
 
     Ok(())
-}
-
-fn temporary_config_path(config_path: &Path) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-
-    config_path.with_extension(format!("tmp-{}-{nanos}", std::process::id()))
 }
 
 fn set_directory_permissions(config_dir: &Path) -> Result<(), ConfigError> {
@@ -262,20 +219,6 @@ fn set_directory_permissions(config_dir: &Path) -> Result<(), ConfigError> {
                 message: error.to_string(),
             },
         )?;
-    }
-
-    Ok(())
-}
-
-fn set_file_permissions(config_path: &Path, file: &std::fs::File) -> Result<(), ConfigError> {
-    #[cfg(unix)]
-    {
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|error| ConfigError::Filesystem {
-                operation: "setting file permissions",
-                path: config_path.display().to_string(),
-                message: error.to_string(),
-            })?;
     }
 
     Ok(())

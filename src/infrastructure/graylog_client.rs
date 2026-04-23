@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use reqwest::{Client, Method};
 use secrecy::ExposeSecret;
 use serde_json::{Map, Value, json};
+use time::format_description::well_known::Rfc3339;
+use time::{Month, OffsetDateTime, Time, UtcOffset};
 
 use crate::application::ports::{GraylogGateway, GraylogGatewayFactory};
 use crate::domain::config::{GraylogConfig, StoredConfig};
@@ -682,80 +684,138 @@ fn bucket_timestamp_value(
     value: &Value,
     interval: DateHistogramInterval,
 ) -> Result<String, HttpError> {
-    let timestamp = match value {
-        Value::String(timestamp) => timestamp,
-        other => {
-            return Err(HttpError::Unavailable {
-                message: format!(
-                    "expected timestamp string in date histogram response, got {other}"
-                ),
-            });
-        }
+    let ts_str = value.as_str().ok_or_else(|| HttpError::Unavailable {
+        message: format!("expected timestamp string in date histogram response, got {value}"),
+    })?;
+
+    let ts = OffsetDateTime::parse(ts_str, &Rfc3339)
+        .map_err(|e| HttpError::Unavailable {
+            message: format!("expected RFC3339 UTC timestamp, got {ts_str}: {e}"),
+        })?
+        .to_offset(UtcOffset::UTC);
+
+    let bucketed = match interval {
+        DateHistogramInterval::Seconds(size) => floor_to_second_boundary(ts, size)?,
+        DateHistogramInterval::Minutes(size) => floor_to_minute_boundary(ts, size)?,
+        DateHistogramInterval::Hours(size) => floor_to_hour_boundary(ts, size)?,
+        DateHistogramInterval::Days(size) => floor_to_day_boundary(ts, size)?,
+        DateHistogramInterval::Weeks(size) => floor_to_week_boundary(ts, size)?,
+        DateHistogramInterval::Months(size) => floor_to_month_boundary(ts, size)?,
+        DateHistogramInterval::Years(size) => floor_to_year_boundary(ts, size)?,
     };
 
-    let mut parts = parse_rfc3339_utc_timestamp(timestamp)?;
+    bucketed
+        .format(&Rfc3339)
+        .map_err(|e| HttpError::Unavailable {
+            message: format!("failed to format bucketed timestamp: {e}"),
+        })
+}
 
-    match interval {
-        DateHistogramInterval::Seconds(size) => {
-            parts.second = floor_component(parts.second, size);
-        }
-        DateHistogramInterval::Minutes(size) => {
-            parts.minute = floor_component(parts.minute, size);
-            parts.second = 0;
-        }
-        DateHistogramInterval::Hours(size) => {
-            parts.hour = floor_component(parts.hour, size);
-            parts.minute = 0;
-            parts.second = 0;
-        }
-        DateHistogramInterval::Days(size) => {
-            let bucket_day = days_from_civil(parts.year, parts.month, parts.day)
-                .div_euclid(i64::from(size))
-                * i64::from(size);
-            let (year, month, day) = civil_from_days(bucket_day);
-            parts.year = year;
-            parts.month = month;
-            parts.day = day;
-            parts.hour = 0;
-            parts.minute = 0;
-            parts.second = 0;
-        }
-        DateHistogramInterval::Weeks(size) => {
-            let week_span = i64::from(size) * 7;
-            let monday_epoch = days_from_civil(1970, 1, 5);
-            let bucket_day = (days_from_civil(parts.year, parts.month, parts.day) - monday_epoch)
-                .div_euclid(week_span)
-                * week_span
-                + monday_epoch;
-            let (year, month, day) = civil_from_days(bucket_day);
-            parts.year = year;
-            parts.month = month;
-            parts.day = day;
-            parts.hour = 0;
-            parts.minute = 0;
-            parts.second = 0;
-        }
-        DateHistogramInterval::Months(size) => {
-            let total_months = parts.year * 12 + i32::from(parts.month) - 1;
-            let bucket_months = total_months.div_euclid(size as i32) * size as i32;
-            parts.year = bucket_months.div_euclid(12);
-            parts.month = (bucket_months.rem_euclid(12) + 1) as u8;
-            parts.day = 1;
-            parts.hour = 0;
-            parts.minute = 0;
-            parts.second = 0;
-        }
-        DateHistogramInterval::Years(size) => {
-            parts.year = parts.year.div_euclid(size as i32) * size as i32;
-            parts.month = 1;
-            parts.day = 1;
-            parts.hour = 0;
-            parts.minute = 0;
-            parts.second = 0;
-        }
+fn floor_to_second_boundary(ts: OffsetDateTime, size: u32) -> Result<OffsetDateTime, HttpError> {
+    let floored = (u32::from(ts.second()) / size) * size;
+    let second = u8::try_from(floored).map_err(|e| HttpError::Unavailable {
+        message: format!("second value out of range: {e}"),
+    })?;
+    let time =
+        Time::from_hms(ts.hour(), ts.minute(), second).map_err(|e| HttpError::Unavailable {
+            message: format!("invalid time components: {e}"),
+        })?;
+    Ok(ts.replace_time(time))
+}
+
+fn floor_to_minute_boundary(ts: OffsetDateTime, size: u32) -> Result<OffsetDateTime, HttpError> {
+    let total_minutes = u32::from(ts.hour()) * 60 + u32::from(ts.minute());
+    let floored = (total_minutes / size) * size;
+    let hour = (floored / 60) as u8;
+    let minute = (floored % 60) as u8;
+    let time = Time::from_hms(hour, minute, 0).map_err(|e| HttpError::Unavailable {
+        message: format!("invalid time components: {e}"),
+    })?;
+    Ok(ts.replace_time(time))
+}
+
+fn floor_to_hour_boundary(ts: OffsetDateTime, size: u32) -> Result<OffsetDateTime, HttpError> {
+    let floored = (u32::from(ts.hour()) / size) * size;
+    let time = Time::from_hms(floored as u8, 0, 0).map_err(|e| HttpError::Unavailable {
+        message: format!("invalid time components: {e}"),
+    })?;
+    Ok(ts.replace_time(time))
+}
+
+fn floor_to_day_boundary(ts: OffsetDateTime, size: u32) -> Result<OffsetDateTime, HttpError> {
+    if size == 1 {
+        return Ok(OffsetDateTime::new_utc(ts.date(), Time::MIDNIGHT));
     }
+    let julian = i64::from(ts.date().to_julian_day());
+    let size = i64::from(size);
+    let bucket_julian =
+        i32::try_from(julian.div_euclid(size) * size).map_err(|e| HttpError::Unavailable {
+            message: format!("julian day out of range: {e}"),
+        })?;
+    let bucket_date =
+        time::Date::from_julian_day(bucket_julian).map_err(|e| HttpError::Unavailable {
+            message: format!("failed to construct date from julian day: {e}"),
+        })?;
+    Ok(OffsetDateTime::new_utc(bucket_date, Time::MIDNIGHT))
+}
 
-    Ok(format_timestamp(parts))
+fn floor_to_week_boundary(ts: OffsetDateTime, size: u32) -> Result<OffsetDateTime, HttpError> {
+    // Preserve the 1970-01-05 Monday anchor to match original behavior.
+    let monday_epoch = i64::from(
+        time::Date::from_calendar_date(1970, Month::January, 5)
+            .map_err(|e| HttpError::Unavailable {
+                message: format!("failed to create epoch: {e}"),
+            })?
+            .to_julian_day(),
+    );
+    let julian = i64::from(ts.date().to_julian_day());
+    let span = i64::from(size) * 7;
+    let bucket_julian = i32::try_from(
+        (julian - monday_epoch).div_euclid(span) * span + monday_epoch,
+    )
+    .map_err(|e| HttpError::Unavailable {
+        message: format!("julian day out of range: {e}"),
+    })?;
+    let bucket_date =
+        time::Date::from_julian_day(bucket_julian).map_err(|e| HttpError::Unavailable {
+            message: format!("failed to construct date from julian day: {e}"),
+        })?;
+    Ok(OffsetDateTime::new_utc(bucket_date, Time::MIDNIGHT))
+}
+
+fn floor_to_month_boundary(ts: OffsetDateTime, size: u32) -> Result<OffsetDateTime, HttpError> {
+    let (year, month, _) = ts.to_calendar_date();
+    let month_num = i32::from(u8::from(month));
+    let total_months = year * 12 + month_num - 1;
+    let size_i32 = i32::try_from(size).map_err(|e| HttpError::Unavailable {
+        message: format!("month bucket size out of range: {e}"),
+    })?;
+    let bucket_months = total_months.div_euclid(size_i32) * size_i32;
+    let bucket_year = bucket_months.div_euclid(12);
+    let bucket_month = (bucket_months.rem_euclid(12) + 1) as u8;
+    let month = Month::try_from(bucket_month).map_err(|e| HttpError::Unavailable {
+        message: format!("invalid month: {e}"),
+    })?;
+    let date = time::Date::from_calendar_date(bucket_year, month, 1).map_err(|e| {
+        HttpError::Unavailable {
+            message: format!("failed to construct date: {e}"),
+        }
+    })?;
+    Ok(OffsetDateTime::new_utc(date, Time::MIDNIGHT))
+}
+
+fn floor_to_year_boundary(ts: OffsetDateTime, size: u32) -> Result<OffsetDateTime, HttpError> {
+    let (year, _, _) = ts.to_calendar_date();
+    let size_i32 = i32::try_from(size).map_err(|e| HttpError::Unavailable {
+        message: format!("year bucket size out of range: {e}"),
+    })?;
+    let bucket_year = year.div_euclid(size_i32) * size_i32;
+    let date = time::Date::from_calendar_date(bucket_year, Month::January, 1).map_err(|e| {
+        HttpError::Unavailable {
+            message: format!("failed to construct date: {e}"),
+        }
+    })?;
+    Ok(OffsetDateTime::new_utc(date, Time::MIDNIGHT))
 }
 
 fn extract_count_value(value: &Value) -> Result<u64, HttpError> {
@@ -770,91 +830,6 @@ fn extract_count_value(value: &Value) -> Result<u64, HttpError> {
             message: format!("expected count metric to be numeric, got {other}"),
         }),
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TimestampParts {
-    year: i32,
-    month: u8,
-    day: u8,
-    hour: u32,
-    minute: u32,
-    second: u32,
-}
-
-fn parse_rfc3339_utc_timestamp(value: &str) -> Result<TimestampParts, HttpError> {
-    if value.len() < 20 || !value.ends_with('Z') {
-        return Err(HttpError::Unavailable {
-            message: format!("expected RFC3339 UTC timestamp, got {value}"),
-        });
-    }
-
-    Ok(TimestampParts {
-        year: parse_component(value, 0, 4, "year")? as i32,
-        month: parse_component(value, 5, 7, "month")? as u8,
-        day: parse_component(value, 8, 10, "day")? as u8,
-        hour: parse_component(value, 11, 13, "hour")?,
-        minute: parse_component(value, 14, 16, "minute")?,
-        second: parse_component(value, 17, 19, "second")?,
-    })
-}
-
-fn parse_component(
-    value: &str,
-    start: usize,
-    end: usize,
-    field: &'static str,
-) -> Result<u32, HttpError> {
-    value
-        .get(start..end)
-        .ok_or_else(|| HttpError::Unavailable {
-            message: format!("expected timestamp component `{field}` in {value}"),
-        })?
-        .parse::<u32>()
-        .map_err(|_| HttpError::Unavailable {
-            message: format!("expected numeric timestamp component `{field}` in {value}"),
-        })
-}
-
-fn floor_component(value: u32, size: u32) -> u32 {
-    (value / size) * size
-}
-
-fn format_timestamp(parts: TimestampParts) -> String {
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z",
-        parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second
-    )
-}
-
-fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
-    let year = year - i32::from(month <= 2);
-    let era = year.div_euclid(400);
-    let yoe = year - era * 400;
-    let month = i32::from(month);
-    let day = i32::from(day);
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-
-    i64::from(era) * 146_097 + i64::from(doe) - 719_468
-}
-
-fn civil_from_days(days: i64) -> (i32, u8, u8) {
-    let days = days + 719_468;
-    let era = days.div_euclid(146_097);
-    let doe = days - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2).div_euclid(153);
-    let day = doy - (153 * mp + 2).div_euclid(5) + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-
-    (
-        (year + i64::from(month <= 2)) as i32,
-        month as u8,
-        day as u8,
-    )
 }
 
 fn normalize_tabular_response(value: Value) -> Result<(Vec<NormalizedRow>, JsonObject), HttpError> {

@@ -113,37 +113,20 @@ fn normalize_segment(field: &'static str, value: String) -> Result<String, Valid
 }
 
 fn parse_relative_range_seconds(value: &str) -> Result<u64, ValidationError> {
-    let (amount, unit) = value.split_at(value.len().saturating_sub(1));
-
-    if amount.is_empty() || unit.is_empty() {
+    let duration =
+        humantime::parse_duration(value).map_err(|_| invalid_relative_timerange(value))?;
+    let secs = duration.as_secs();
+    if secs == 0 {
         return Err(invalid_relative_timerange(value));
     }
-
-    let amount = amount
-        .parse::<u64>()
-        .map_err(|_| invalid_relative_timerange(value))?;
-
-    if amount == 0 {
-        return Err(invalid_relative_timerange(value));
-    }
-
-    let multiplier = match unit {
-        "s" => 1_u64,
-        "m" => 60_u64,
-        "h" => 60_u64 * 60,
-        "d" => 60_u64 * 60 * 24,
-        "w" => 60_u64 * 60 * 24 * 7,
-        _ => return Err(invalid_relative_timerange(value)),
-    };
-
-    amount
-        .checked_mul(multiplier)
-        .ok_or_else(|| invalid_relative_timerange(value))
+    Ok(secs)
 }
 
 fn invalid_relative_timerange(value: &str) -> ValidationError {
     ValidationError::InvalidTimerange {
-        message: format!("relative time range `{value}` must use the format Ns, Nm, Nh, Nd, or Nw"),
+        message: format!(
+            "relative time range `{value}` must use a positive duration like 15m, 1h, 5d, or 1w"
+        ),
     }
 }
 
@@ -173,7 +156,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("must use the format Ns, Nm, Nh, Nd, or Nw")
+                .contains("must use a positive duration like 15m, 1h, 5d, or 1w")
         );
     }
 }

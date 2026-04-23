@@ -614,23 +614,13 @@ fn compute_group_duration(rows: &[&NormalizedRow]) -> Option<u64> {
         .and_then(|row| row.get("timestamp").and_then(|value| value.as_str()))?;
     let first_millis = parse_timestamp_to_millis(first_ts)?;
     let last_millis = parse_timestamp_to_millis(last_ts)?;
-    Some(last_millis.saturating_sub(first_millis))
+    Some((last_millis - first_millis).max(0) as u64)
 }
 
-fn parse_timestamp_to_millis(ts: &str) -> Option<u64> {
-    let year: u64 = ts.get(0..4)?.parse().ok()?;
-    let month: u64 = ts.get(5..7)?.parse().ok()?;
-    let day: u64 = ts.get(8..10)?.parse().ok()?;
-    let hour: u64 = ts.get(11..13)?.parse().ok()?;
-    let minute: u64 = ts.get(14..16)?.parse().ok()?;
-    let second: u64 = ts.get(17..19)?.parse().ok()?;
-    let millis: u64 = ts
-        .get(20..23)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
-
-    let days = (year - 1970) * 365 + (month.saturating_sub(1)) * 31 + day.saturating_sub(1);
-    Some(days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis)
+fn parse_timestamp_to_millis(ts: &str) -> Option<i64> {
+    use time::format_description::well_known::Rfc3339;
+    let dt = time::OffsetDateTime::parse(ts, &Rfc3339).ok()?;
+    Some(dt.unix_timestamp() * 1000 + dt.millisecond() as i64)
 }
 
 struct UnconfiguredConfigStore;
