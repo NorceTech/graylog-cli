@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -49,7 +50,7 @@ pub struct UpdaterService {
     updater: Arc<dyn UpdaterGateway>,
     cache_store: Arc<dyn CacheStore>,
     current_version: String,
-    staged_path: PathBuf,
+    staged_dir: PathBuf,
 }
 
 impl UpdaterService {
@@ -57,14 +58,18 @@ impl UpdaterService {
         updater: Arc<dyn UpdaterGateway>,
         cache_store: Arc<dyn CacheStore>,
         current_version: String,
-        staged_path: PathBuf,
+        staged_dir: PathBuf,
     ) -> Self {
         Self {
             updater,
             cache_store,
             current_version,
-            staged_path,
+            staged_dir,
         }
+    }
+
+    fn staged_path_for(&self, version: &str) -> PathBuf {
+        self.staged_dir.join(staged_filename(version))
     }
 
     pub fn current_version(&self) -> &str {
@@ -94,8 +99,8 @@ impl UpdaterService {
         }
 
         let bytes = self.updater.download_asset(&release.asset_url).await?;
-        self.write_staged_binary(&bytes)?;
-        apply_staged_binary(&self.staged_path)?;
+        let staged_path = self.stage_atomic(&release.version, bytes).await?;
+        apply_staged_binary(staged_path).await?;
         self.clear_pending().await;
         self.record_check(Some(release.version.clone())).await;
 
@@ -127,7 +132,7 @@ impl UpdaterService {
 
         if let Some(existing) = self.load_pending().await
             && existing.version == release.version
-            && self.staged_path.exists()
+            && existing.staged_path.exists()
         {
             self.record_check(Some(release.version.clone())).await;
             return Ok(UpgradeStatus {
@@ -141,10 +146,10 @@ impl UpdaterService {
         }
 
         let bytes = self.updater.download_asset(&release.asset_url).await?;
-        self.write_staged_binary(&bytes)?;
+        let staged_path = self.stage_atomic(&release.version, bytes).await?;
         self.save_pending(&PendingUpgrade {
             version: release.version.clone(),
-            staged_path: self.staged_path.clone(),
+            staged_path,
         })
         .await?;
         self.record_check(Some(release.version.clone())).await;
@@ -170,12 +175,12 @@ impl UpdaterService {
         }
 
         if !is_newer(&self.current_version, &pending.version).unwrap_or(false) {
-            let _ = std::fs::remove_file(&pending.staged_path);
+            remove_file_best_effort(pending.staged_path).await;
             self.clear_pending().await;
             return Ok(None);
         }
 
-        apply_staged_binary(&pending.staged_path)?;
+        apply_staged_binary(pending.staged_path).await?;
         self.clear_pending().await;
         Ok(Some(pending.version))
     }
@@ -227,25 +232,67 @@ impl UpdaterService {
             .await;
     }
 
-    fn write_staged_binary(&self, bytes: &[u8]) -> Result<(), UpdaterError> {
-        if let Some(parent) = self.staged_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
+    async fn stage_atomic(
+        &self,
+        version: &str,
+        bytes: Vec<u8>,
+    ) -> Result<PathBuf, UpdaterError> {
+        let staged_dir = self.staged_dir.clone();
+        let final_path = self.staged_path_for(version);
+
+        tokio::task::spawn_blocking(move || -> Result<PathBuf, UpdaterError> {
+            std::fs::create_dir_all(&staged_dir).map_err(|error| {
                 UpdaterError::Apply(format!("failed to create staging dir: {error}"))
             })?;
-        }
-        std::fs::write(&self.staged_path, bytes)
-            .map_err(|error| UpdaterError::Apply(format!("failed to write staged binary: {error}")))?;
+            let mut temp = tempfile::NamedTempFile::new_in(&staged_dir).map_err(|error| {
+                UpdaterError::Apply(format!("failed to create staging tempfile: {error}"))
+            })?;
+            temp.write_all(&bytes).map_err(|error| {
+                UpdaterError::Apply(format!("failed to write staged binary: {error}"))
+            })?;
+            temp.as_file().sync_all().map_err(|error| {
+                UpdaterError::Apply(format!("failed to sync staged binary: {error}"))
+            })?;
+            temp.persist(&final_path).map_err(|error| {
+                UpdaterError::Apply(format!(
+                    "failed to persist staged binary: {}",
+                    error.error
+                ))
+            })?;
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&self.staged_path, std::fs::Permissions::from_mode(0o755))
-                .map_err(|error| {
-                    UpdaterError::Apply(format!("failed to chmod staged binary: {error}"))
-                })?;
-        }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&final_path, std::fs::Permissions::from_mode(0o755))
+                    .map_err(|error| {
+                        UpdaterError::Apply(format!("failed to chmod staged binary: {error}"))
+                    })?;
+            }
 
-        Ok(())
+            Ok(final_path)
+        })
+        .await
+        .map_err(|error| {
+            UpdaterError::Apply(format!("failed to join staging task: {error}"))
+        })?
+    }
+}
+
+fn staged_filename(version: &str) -> String {
+    let sanitized: String = version
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cfg!(windows) {
+        format!("staged-{sanitized}.exe")
+    } else {
+        format!("staged-{sanitized}")
     }
 }
 
@@ -272,11 +319,19 @@ pub fn is_newer(current: &str, candidate: &str) -> Result<bool, UpdaterError> {
     Ok(candidate_version > current_version)
 }
 
-fn apply_staged_binary(path: &std::path::Path) -> Result<(), UpdaterError> {
-    self_replace::self_replace(path)
-        .map_err(|error| UpdaterError::Apply(format!("failed to replace binary: {error}")))?;
-    let _ = std::fs::remove_file(path);
-    Ok(())
+async fn apply_staged_binary(path: PathBuf) -> Result<(), UpdaterError> {
+    tokio::task::spawn_blocking(move || {
+        self_replace::self_replace(&path)
+            .map_err(|error| UpdaterError::Apply(format!("failed to replace binary: {error}")))?;
+        let _ = std::fs::remove_file(&path);
+        Ok::<(), UpdaterError>(())
+    })
+    .await
+    .map_err(|error| UpdaterError::Apply(format!("failed to join apply task: {error}")))?
+}
+
+async fn remove_file_best_effort(path: PathBuf) {
+    let _ = tokio::task::spawn_blocking(move || std::fs::remove_file(&path)).await;
 }
 
 fn unix_now() -> u64 {
@@ -389,7 +444,7 @@ mod tests {
             updater.clone(),
             cache.clone(),
             current.to_string(),
-            dir.join("staged"),
+            dir.to_path_buf(),
         );
         (service, cache, updater)
     }
@@ -434,7 +489,8 @@ mod tests {
             .expect("stage should succeed");
         assert_eq!(status.action, UpgradeAction::Staged);
         assert_eq!(status.latest_version.as_deref(), Some("0.2.0"));
-        assert!(dir.path().join("staged").exists());
+        let expected_path = dir.path().join(staged_filename("0.2.0"));
+        assert!(expected_path.exists());
         let pending_raw = cache
             .get_serialized(PENDING_UPGRADE_KEY)
             .await
@@ -443,6 +499,31 @@ mod tests {
         let pending: PendingUpgrade =
             serde_json::from_str(&pending_raw).expect("pending marker should deserialize");
         assert_eq!(pending.version, "0.2.0");
+        assert_eq!(pending.staged_path, expected_path);
+    }
+
+    #[tokio::test]
+    async fn stage_update_uses_versioned_filename() {
+        let dir = TempDir::new().expect("temp dir should create");
+        let (service, _, _) =
+            make_service(dir.path(), "0.1.0", "0.2.0", vec![0xAAu8; 1024]);
+        service
+            .stage_update_if_newer()
+            .await
+            .expect("stage should succeed");
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read staged dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            entries.iter().any(|name| name.contains("0.2.0")),
+            "expected a file with the version in its name, got {entries:?}"
+        );
+        assert!(
+            entries.iter().all(|name| !name.starts_with(".tmp")),
+            "tempfile should not be left behind, got {entries:?}"
+        );
     }
 
     #[tokio::test]
@@ -454,7 +535,6 @@ mod tests {
             .await
             .expect("stage should succeed");
         assert_eq!(status.action, UpgradeAction::UpToDate);
-        assert!(!dir.path().join("staged").exists());
         let pending = cache
             .get_serialized(PENDING_UPGRADE_KEY)
             .await

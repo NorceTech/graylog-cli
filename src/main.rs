@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use graylog_cli::application::ports::config_store::ConfigStore;
+use graylog_cli::application::ports::updater::UpdaterError;
 use graylog_cli::application::service::ApplicationService;
 use graylog_cli::application::updater_service::{
     DEFAULT_CHECK_INTERVAL_SECONDS, UpdaterService,
@@ -155,7 +156,9 @@ async fn run(
         }
         Commands::Upgrade => {
             let updater = updater.ok_or_else(|| {
-                CliError::Config("updater is not available on this platform".to_string())
+                CliError::Update(UpdaterError::Unavailable(
+                    "updater is not available for this build".to_string(),
+                ))
             })?;
             let status = updater.upgrade_now().await.map_err(CliError::from)?;
             emit_json_success(&status);
@@ -172,23 +175,17 @@ async fn run(
 
 fn build_updater_service(cache_store: Arc<FileConfigStore>) -> Option<Arc<UpdaterService>> {
     let gateway = GitHubUpdaterGateway::new().ok()?;
-    let staged_path = staged_binary_path()?;
+    let staged_dir = staged_binary_dir()?;
     Some(Arc::new(UpdaterService::new(
         Arc::new(gateway),
         cache_store,
         CURRENT_VERSION.to_string(),
-        staged_path,
+        staged_dir,
     )))
 }
 
-fn staged_binary_path() -> Option<PathBuf> {
-    let dir = dirs::config_dir()?.join("graylog-cli");
-    let filename = if cfg!(windows) {
-        "staged-binary.exe"
-    } else {
-        "staged-binary"
-    };
-    Some(dir.join(filename))
+fn staged_binary_dir() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("graylog-cli"))
 }
 
 async fn auto_update_enabled(config_store: &dyn ConfigStore) -> bool {
