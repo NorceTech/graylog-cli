@@ -36,7 +36,7 @@
         }:
         let
           pname = "graylog-cli";
-          version = "0.1.0";
+          version = "0.0.3-alpha";
           commonArgs = {
             inherit pname version;
             src = self;
