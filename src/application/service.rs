@@ -608,7 +608,7 @@ fn compute_group_duration(rows: &[&NormalizedRow]) -> Option<u64> {
         .and_then(|row| row.get("timestamp").and_then(|value| value.as_str()))?;
     let first_millis = parse_timestamp_to_millis(first_ts)?;
     let last_millis = parse_timestamp_to_millis(last_ts)?;
-    Some((last_millis - first_millis).max(0) as u64)
+    Some(first_millis.abs_diff(last_millis))
 }
 
 fn parse_timestamp_to_millis(ts: &str) -> Option<i64> {
@@ -1302,6 +1302,37 @@ mod tests {
             object(vec![
                 ("level", json!("ERROR")),
                 ("timestamp", json!("2026-01-01T00:00:02.500Z")),
+            ]),
+        ];
+        let gateway = FakeGraylogGateway::with_search_results(vec![make_search_messages_result(
+            messages,
+            Some(2),
+            Map::new(),
+        )]);
+        let (service, _, _) = service_with_gateway(
+            FakeConfigStore::new(test_config()),
+            FakeCacheStore::default(),
+            gateway,
+        );
+        let mut input = make_search_input();
+        input.group_by = Some("level".to_string());
+        let status = service.search(input).await.expect("search should succeed");
+        assert_eq!(
+            status.groups.expect("groups should be present")[0].duration_ms,
+            Some(2_500)
+        );
+    }
+
+    #[tokio::test]
+    async fn search_groups_compute_duration_from_descending_timestamps() {
+        let messages = vec![
+            object(vec![
+                ("level", json!("ERROR")),
+                ("timestamp", json!("2026-01-01T00:00:02.500Z")),
+            ]),
+            object(vec![
+                ("level", json!("ERROR")),
+                ("timestamp", json!("2026-01-01T00:00:00Z")),
             ]),
         ];
         let gateway = FakeGraylogGateway::with_search_results(vec![make_search_messages_result(
