@@ -338,40 +338,14 @@ fn unix_now() -> u64 {
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Mutex;
 
     use async_trait::async_trait;
     use tempfile::TempDir;
 
-    use crate::application::ports::cache_store::CacheError;
     use crate::application::ports::updater::ReleaseInfo;
-
-    #[derive(Default)]
-    struct FakeCacheStore {
-        entries: Mutex<HashMap<String, String>>,
-    }
-
-    #[async_trait]
-    impl CacheStore for FakeCacheStore {
-        async fn get_serialized(&self, key: &str) -> exn::Result<Option<String>, CacheError> {
-            Ok(self
-                .entries
-                .lock()
-                .expect("cache mutex should not be poisoned")
-                .get(key)
-                .cloned())
-        }
-
-        async fn save_serialized(&self, key: String, data: String) -> exn::Result<(), CacheError> {
-            self.entries
-                .lock()
-                .expect("cache mutex should not be poisoned")
-                .insert(key, data);
-            Ok(())
-        }
-    }
+    use crate::application::test_support::test_support::FakeCacheStore;
 
     struct FakeUpdater {
         release: Mutex<ReleaseInfo>,

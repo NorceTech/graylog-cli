@@ -82,12 +82,13 @@ pub struct AuthArgs {
     #[arg(short = 'u', long = "url", required = true)]
     pub url: String,
     /// Graylog access token.
-    #[arg(short = 't', long = "token", required = true)]
+    #[arg(short = 't', long = "token", required = true, env = "GRAYLOG_TOKEN")]
     pub token: String,
 }
 
 #[derive(Debug, Args)]
 pub struct SearchArgs {
+    #[arg(help = "Lucene search query")]
     pub query: String,
     #[command(flatten)]
     pub timerange: TimerangeArgs,
@@ -131,10 +132,11 @@ impl SearchArgs {
 
 #[derive(Debug, Args)]
 pub struct AggregateArgs {
+    #[arg(help = "Lucene search query")]
     pub query: String,
     #[arg(long = "aggregation-type", value_enum)]
     pub aggregation_type: AggregationTypeArg,
-    #[arg(long = "field")]
+    #[arg(long = "field", help = "Field to aggregate on")]
     pub field: String,
     #[arg(long = "size", value_parser = clap::value_parser!(u64).range(1..=100))]
     pub size: Option<u64>,
@@ -230,17 +232,21 @@ impl StreamsCommands {
 
 #[derive(Debug, Args)]
 pub struct StreamIdArgs {
+    #[arg(help = "Graylog stream ID")]
     pub stream_id: String,
 }
 
 #[derive(Debug, Args)]
 pub struct StreamNameArgs {
+    #[arg(help = "Stream name to search for")]
     pub name: String,
 }
 
 #[derive(Debug, Args)]
 pub struct StreamSearchArgs {
+    #[arg(help = "Graylog stream ID")]
     pub stream_id: String,
+    #[arg(help = "Lucene search query")]
     pub query: String,
     #[command(flatten)]
     pub timerange: TimerangeArgs,
@@ -270,6 +276,7 @@ impl StreamSearchArgs {
 
 #[derive(Debug, Args)]
 pub struct StreamIdTimerangeArgs {
+    #[arg(help = "Graylog stream ID")]
     pub stream_id: String,
     #[command(flatten)]
     pub timerange: TimerangeArgs,

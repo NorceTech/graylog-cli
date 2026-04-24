@@ -19,6 +19,7 @@ use crate::domain::models::{
 
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
 const MAX_STREAM_SEARCH_LIMIT: u64 = 100;
+const MAX_ALL_PAGES_MESSAGES: usize = 10_000;
 const DEFAULT_SEARCH_OFFSET: u64 = 0;
 const DEFAULT_SEARCH_SORT: &str = "timestamp";
 
@@ -89,16 +90,7 @@ impl ApplicationService {
         let mut input = input;
 
         if input.all_fields && input.fields.is_empty() {
-            let config = self
-                .config_store
-                .load()
-                .await
-                .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
-                .ok_or_else(|| {
-                    CliError::Config(
-                        "graylog is not configured, run `graylog-cli auth` first".to_string(),
-                    )
-                })?;
+            let config = self.require_config().await?;
             let ttl = config.graylog.fields_cache_ttl_seconds;
             let cache_key = "fields".to_string();
             let now = SystemTime::now()
@@ -381,16 +373,7 @@ impl ApplicationService {
         command: &'static str,
         request: MessageSearchRequest,
     ) -> exn::Result<MessageSearchStatus, CliError> {
-        let config = self
-            .config_store
-            .load()
-            .await
-            .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
-            .ok_or_else(|| {
-                CliError::Config(
-                    "graylog is not configured, run `graylog-cli auth` first".to_string(),
-                )
-            })?;
+        let config = self.require_config().await?;
         let client = self.graylog_gateway_with_config(config.graylog)?;
         let result = client.search_messages(request.clone()).await.or_raise(|| {
             CliError::Http(HttpError::Unavailable {
@@ -419,16 +402,7 @@ impl ApplicationService {
         &self,
         input: &SearchCommandInput,
     ) -> exn::Result<MessageSearchStatus, CliError> {
-        let config = self
-            .config_store
-            .load()
-            .await
-            .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
-            .ok_or_else(|| {
-                CliError::Config(
-                    "graylog is not configured, run `graylog-cli auth` first".to_string(),
-                )
-            })?;
+        let config = self.require_config().await?;
         let client = self.graylog_gateway_with_config(config.graylog)?;
         let mut request = self.build_search_request(input.clone(), DEFAULT_SEARCH_LIMIT);
         let mut all_messages = Vec::new();
@@ -455,6 +429,10 @@ impl ApplicationService {
 
             let fetched = result.messages.len();
             all_messages.extend(result.messages);
+
+            if all_messages.len() >= MAX_ALL_PAGES_MESSAGES {
+                break;
+            }
 
             request.offset += fetched as u64;
 
@@ -535,16 +513,7 @@ impl ApplicationService {
         command: &'static str,
         request: AggregateSearchRequest,
     ) -> exn::Result<AggregateStatus, CliError> {
-        let config = self
-            .config_store
-            .load()
-            .await
-            .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
-            .ok_or_else(|| {
-                CliError::Config(
-                    "graylog is not configured, run `graylog-cli auth` first".to_string(),
-                )
-            })?;
+        let config = self.require_config().await?;
         let client = self.graylog_gateway_with_config(config.graylog)?;
         let aggregation_type = request.aggregation_type.as_cli_value();
         let result = client.search_aggregate(request).await.or_raise(|| {
@@ -562,9 +531,8 @@ impl ApplicationService {
         })
     }
 
-    async fn graylog_gateway(&self) -> exn::Result<Arc<dyn GraylogGateway>, CliError> {
-        let config = self
-            .config_store
+    async fn require_config(&self) -> exn::Result<Config, CliError> {
+        self.config_store
             .load()
             .await
             .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
@@ -572,8 +540,12 @@ impl ApplicationService {
                 CliError::Config(
                     "graylog is not configured, run `graylog-cli auth` first".to_string(),
                 )
-            })?;
+            })
+            .map_err(Into::into)
+    }
 
+    async fn graylog_gateway(&self) -> exn::Result<Arc<dyn GraylogGateway>, CliError> {
+        let config = self.require_config().await?;
         self.graylog_gateway_with_config(config.graylog)
     }
 
@@ -639,14 +611,13 @@ fn parse_timestamp_to_millis(ts: &str) -> Option<i64> {
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
     use std::sync::Mutex;
 
     use async_trait::async_trait;
     use serde_json::{Map, Value};
 
-    use crate::application::ports::cache_store::CacheError;
     use crate::application::ports::config_store::ConfigError;
+    use crate::application::test_support::test_support::FakeCacheStore;
     use crate::domain::config::{
         DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, UpdaterConfig,
     };
@@ -697,48 +668,6 @@ mod tests {
                 .state
                 .lock()
                 .expect("config mutex should not be poisoned") = Some(config);
-            Ok(())
-        }
-    }
-
-    #[derive(Clone, Default)]
-    struct FakeCacheStore {
-        storage: Arc<Mutex<HashMap<String, String>>>,
-    }
-
-    impl FakeCacheStore {
-        fn get(&self, key: &str) -> Option<String> {
-            self.storage
-                .lock()
-                .expect("cache mutex should not be poisoned")
-                .get(key)
-                .cloned()
-        }
-
-        fn insert(&self, key: &str, value: String) {
-            self.storage
-                .lock()
-                .expect("cache mutex should not be poisoned")
-                .insert(key.to_string(), value);
-        }
-    }
-
-    #[async_trait]
-    impl CacheStore for FakeCacheStore {
-        async fn get_serialized(&self, key: &str) -> exn::Result<Option<String>, CacheError> {
-            Ok(self
-                .storage
-                .lock()
-                .expect("cache mutex should not be poisoned")
-                .get(key)
-                .cloned())
-        }
-
-        async fn save_serialized(&self, key: String, data: String) -> exn::Result<(), CacheError> {
-            self.storage
-                .lock()
-                .expect("cache mutex should not be poisoned")
-                .insert(key, data);
             Ok(())
         }
     }

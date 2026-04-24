@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 async-trait = "0.1.89"
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 dirs = "6"
 exn = "0.3"
 humantime = "2"
