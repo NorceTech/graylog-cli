@@ -97,6 +97,7 @@
                 cargo-deny
                 cargo-edit
                 cargo-watch
+                cargo-wizard
                 openssl
                 pkg-config
                 rust-analyzer
