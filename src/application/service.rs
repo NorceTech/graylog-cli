@@ -1434,8 +1434,16 @@ mod tests {
         let mut input = make_search_input();
         input.all_pages = true;
         let status = service.search(input).await.expect("search should succeed");
+        let requests = gateway.search_requests();
         assert_eq!(status.messages.len(), 1_250);
-        assert_eq!(gateway.search_requests().len(), 3);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.offset)
+                .collect::<Vec<_>>(),
+            vec![0, 500, 750]
+        );
+        assert!(requests.iter().all(|request| request.limit == 500));
     }
 
     #[tokio::test]
