@@ -95,7 +95,7 @@ Search Graylog messages with optional grouping and automatic pagination.
 ```bash
 graylog-cli search <QUERY> [--time-range 15m] [--field message] [--field source] \
   [--limit 50] [--offset 0] [--sort timestamp] [--sort-direction desc] [--stream-id <ID>] \
-  [--group-by <FIELD>] [--all-pages]
+  [--group-by <FIELD>] [--all-pages] [--all-fields]
 ```
 
 | Flag               | Values                       | Notes                                                              |
@@ -103,6 +103,7 @@ graylog-cli search <QUERY> [--time-range 15m] [--field message] [--field source]
 | `--time-range`     | `Ns`, `Nm`, `Nh`, `Nd`, `Nw` | Relative range. Mutually exclusive with `--from`/`--to`            |
 | `--from` / `--to`  | ISO 8601 timestamps          | Absolute range. Both required together                             |
 | `--field`          | repeatable                   | Restrict returned fields                                           |
+| `--all-fields`     | flag (no value)              | Fetch all indexed fields (cached on disk with TTL). Ignored when `--field` is set |
 | `--limit`          | 1-1000                       | Per-page limit (ignored when `--all-pages` is set)                 |
 | `--offset`         | non-negative integer         | Pagination offset (ignored when `--all-pages` is set)              |
 | `--sort`           | field name                   | Default: `timestamp`                                               |
@@ -114,6 +115,8 @@ graylog-cli search <QUERY> [--time-range 15m] [--field message] [--field source]
 When `--group-by` is set, the output includes a `groups` array where each group has `key` (field value), `count` (number of messages), and `duration_ms` (time span from first to last message in the group). Use `--sort-direction asc` with `--group-by` for chronological grouping.
 
 When `--all-pages` is set, the CLI automatically paginates through all results. Useful for queries that match more than 500 events.
+
+When `--all-fields` is set and no `--field` flags are provided, the CLI fetches the full list of indexed fields from an on-disk cache (with a configurable TTL) and uses them as the field list. This avoids having to specify `--field` for every field manually. If any `--field` flags are set, `--all-fields` is ignored.
 
 #### Recommended: Fetching errors
 
