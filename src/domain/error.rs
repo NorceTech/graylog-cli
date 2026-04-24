@@ -12,7 +12,7 @@ pub enum CliError {
     Validation(#[from] ValidationError),
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum HttpError {
     #[error("request could not be built: {message}")]
     RequestBuild { message: String },

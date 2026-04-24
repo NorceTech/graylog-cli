@@ -80,8 +80,6 @@ fn error_kind_for_cli_error(error: &CliError) -> &'static str {
     }
 }
 
-const AUTH_HINT: &str = "run `graylog-cli auth -u <URL> -t <TOKEN>`";
-
 fn error_kind_for_http_error(error: &HttpError) -> &'static str {
     match error {
         HttpError::Transport { .. } => "network_error",

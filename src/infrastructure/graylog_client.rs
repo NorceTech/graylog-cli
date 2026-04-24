@@ -67,14 +67,6 @@ impl GraylogClient {
         Ok(Self::new(http_client, config))
     }
 
-    pub fn http_client(&self) -> &Client {
-        &self.http_client
-    }
-
-    pub fn config(&self) -> &GraylogConfig {
-        &self.config
-    }
-
     pub async fn ping(&self) -> Result<(), HttpError> {
         self.system_info().await.map(|_| ())
     }
@@ -120,7 +112,7 @@ impl GraylogClient {
             AggregationType::DateHistogram if request.interval.is_some() => {
                 normalize_date_histogram_response(response, &request.interval)?
             }
-            AggregationType::Cardinality if should_use_cardinality_fallback_rows(request) => {
+            AggregationType::Cardinality => {
                 normalize_cardinality_response(response, &request.field)?
             }
             _ => normalize_tabular_response(response)?,
@@ -394,10 +386,6 @@ fn should_retry_aggregate_with_legacy_grouping(
     }
 }
 
-fn should_use_cardinality_fallback_rows(request: &AggregateSearchRequest) -> bool {
-    matches!(request.aggregation_type, AggregationType::Cardinality)
-}
-
 #[async_trait]
 impl GraylogGateway for GraylogClient {
     fn base_url(&self) -> &str {
@@ -426,8 +414,8 @@ impl GraylogGateway for GraylogClient {
         GraylogClient::list_streams(self).await
     }
 
-    async fn get_stream(&self, stream_id: String) -> Result<StreamResult, HttpError> {
-        GraylogClient::get_stream(self, &stream_id).await
+    async fn get_stream(&self, stream_id: &str) -> Result<StreamResult, HttpError> {
+        GraylogClient::get_stream(self, stream_id).await
     }
 
     async fn system_info(&self) -> Result<SystemResult, HttpError> {
@@ -816,12 +804,9 @@ fn floor_to_year_boundary(ts: OffsetDateTime, size: u32) -> Result<OffsetDateTim
 
 fn extract_count_value(value: &Value) -> Result<u64, HttpError> {
     match value {
-        Value::Number(number) => number
-            .as_u64()
-            .or_else(|| number.as_i64().map(|v| v as u64))
-            .ok_or_else(|| HttpError::Unavailable {
-                message: format!("expected count metric to be an integer, got {value}"),
-            }),
+        Value::Number(number) => number.as_u64().ok_or_else(|| HttpError::Unavailable {
+            message: format!("expected count metric to be a non-negative integer, got {value}"),
+        }),
         other => Err(HttpError::Unavailable {
             message: format!("expected count metric to be numeric, got {other}"),
         }),
@@ -1828,8 +1813,8 @@ mod tests {
     }
 
     #[test]
-    fn extract_count_i64() {
-        assert_eq!(extract_count_value(&json!(-1)).unwrap(), u64::MAX);
+    fn extract_count_rejects_negative() {
+        extract_count_value(&json!(-1)).expect_err("count must be non-negative");
     }
 
     #[test]

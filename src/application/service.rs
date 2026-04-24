@@ -188,14 +188,11 @@ impl ApplicationService {
 
     pub async fn streams_show(&self, stream_id: &str) -> exn::Result<StreamStatus, CliError> {
         let client = self.graylog_gateway().await?;
-        let result = client
-            .get_stream(stream_id.to_string())
-            .await
-            .or_raise(|| {
-                CliError::Http(HttpError::Unavailable {
-                    message: format!("failed to get stream `{stream_id}`"),
-                })
-            })?;
+        let result = client.get_stream(stream_id).await.or_raise(|| {
+            CliError::Http(HttpError::Unavailable {
+                message: format!("failed to get stream `{stream_id}`"),
+            })
+        })?;
 
         Ok(StreamStatus {
             ok: true,
@@ -485,7 +482,7 @@ impl ApplicationService {
         let client = self.graylog_gateway().await?;
 
         if let Some(stream_id) = request.streams.first() {
-            client.get_stream(stream_id.clone()).await.or_raise(|| {
+            client.get_stream(stream_id).await.or_raise(|| {
                 CliError::Http(HttpError::Unavailable {
                     message: format!("failed to get stream `{stream_id}`"),
                 })
@@ -708,7 +705,7 @@ mod tests {
 
     #[async_trait]
     impl CacheStore for FakeCacheStore {
-        async fn get_serialized(&self, key: &String) -> exn::Result<Option<String>, CacheError> {
+        async fn get_serialized(&self, key: &str) -> exn::Result<Option<String>, CacheError> {
             Ok(self
                 .storage
                 .lock()
@@ -738,8 +735,6 @@ mod tests {
         search_requests: Arc<Mutex<Vec<MessageSearchRequest>>>,
         aggregate_requests: Arc<Mutex<Vec<AggregateSearchRequest>>>,
         list_fields_calls: Arc<Mutex<usize>>,
-        list_streams_calls: Arc<Mutex<usize>>,
-        get_stream_calls: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeGraylogGateway {
@@ -766,8 +761,6 @@ mod tests {
                 search_requests: Arc::new(Mutex::new(Vec::new())),
                 aggregate_requests: Arc::new(Mutex::new(Vec::new())),
                 list_fields_calls: Arc::new(Mutex::new(0)),
-                list_streams_calls: Arc::new(Mutex::new(0)),
-                get_stream_calls: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -842,24 +835,6 @@ mod tests {
         }
     }
 
-    fn clone_http_error(error: &HttpError) -> HttpError {
-        match error {
-            HttpError::RequestBuild { message } => HttpError::RequestBuild {
-                message: message.clone(),
-            },
-            HttpError::Transport { message } => HttpError::Transport {
-                message: message.clone(),
-            },
-            HttpError::UnexpectedStatus { status, message } => HttpError::UnexpectedStatus {
-                status: *status,
-                message: message.clone(),
-            },
-            HttpError::Unavailable { message } => HttpError::Unavailable {
-                message: message.clone(),
-            },
-        }
-    }
-
     #[async_trait]
     impl GraylogGateway for FakeGraylogGateway {
         fn base_url(&self) -> &str {
@@ -872,7 +847,7 @@ mod tests {
                 .expect("ping mutex should not be poisoned")
                 .as_ref()
                 .map(|_| ())
-                .map_err(clone_http_error)
+                .map_err(|error| error.clone())
         }
 
         async fn search_messages(
@@ -910,10 +885,6 @@ mod tests {
         }
 
         async fn list_streams(&self) -> Result<StreamsResult, HttpError> {
-            *self
-                .list_streams_calls
-                .lock()
-                .expect("stream call mutex should not be poisoned") += 1;
             Ok(self
                 .streams_result
                 .lock()
@@ -921,11 +892,7 @@ mod tests {
                 .clone())
         }
 
-        async fn get_stream(&self, stream_id: String) -> Result<StreamResult, HttpError> {
-            self.get_stream_calls
-                .lock()
-                .expect("get stream mutex should not be poisoned")
-                .push(stream_id);
+        async fn get_stream(&self, _stream_id: &str) -> Result<StreamResult, HttpError> {
             Ok(self
                 .stream_result
                 .lock()

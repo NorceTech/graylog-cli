@@ -81,7 +81,7 @@ impl ConfigStore for FileConfigStore {
 
 #[async_trait]
 impl CacheStore for FileConfigStore {
-    async fn get_serialized(&self, key: &String) -> exn::Result<Option<String>, CacheError> {
+    async fn get_serialized(&self, key: &str) -> exn::Result<Option<String>, CacheError> {
         let cache_path = Self::cache_path_for_key(key)?;
 
         let contents = task::spawn_blocking(move || std::fs::read_to_string(&cache_path).ok())

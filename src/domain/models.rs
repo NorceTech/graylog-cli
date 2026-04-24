@@ -1,4 +1,3 @@
-use secrecy::SecretBox;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -22,7 +21,6 @@ pub enum SortDirection {
     Desc,
 }
 
-pub type RuntimeToken = SecretBox<String>;
 pub type JsonObject = Map<String, Value>;
 pub type NormalizedRow = JsonObject;
 

@@ -25,7 +25,7 @@ pub trait GraylogGateway: Send + Sync {
 
     async fn list_streams(&self) -> Result<StreamsResult, HttpError>;
 
-    async fn get_stream(&self, stream_id: String) -> Result<StreamResult, HttpError>;
+    async fn get_stream(&self, stream_id: &str) -> Result<StreamResult, HttpError>;
 
     async fn system_info(&self) -> Result<SystemResult, HttpError>;
 
