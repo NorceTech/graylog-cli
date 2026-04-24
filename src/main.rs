@@ -1,6 +1,7 @@
 use clap::Parser;
 use graylog_cli::application::service::ApplicationService;
 use graylog_cli::domain::error::CliError;
+use graylog_cli::domain::error::ValidationError;
 use graylog_cli::infrastructure::config_store::FileConfigStore;
 use graylog_cli::infrastructure::graylog_client::ReqwestGraylogGatewayFactory;
 use graylog_cli::presentation::cli::{Cli, Commands, StreamsCommands, SystemCommands};
@@ -9,6 +10,7 @@ use graylog_cli::presentation::output::{
 };
 use secrecy::SecretString;
 use std::sync::Arc;
+use url::Url;
 
 #[tokio::main]
 async fn main() {
@@ -22,7 +24,7 @@ async fn main() {
     }
 
     let config_store = Arc::new(FileConfigStore::new());
-    let service = ApplicationService::with_dependencies(
+    let service = ApplicationService::new(
         config_store.clone(),
         Arc::new(ReqwestGraylogGatewayFactory),
         config_store,
@@ -44,14 +46,17 @@ fn parse_cli() -> Result<Cli, i32> {
     }
 }
 
-async fn run(
-    command: Commands,
-    service: &ApplicationService,
-) -> Result<(), exn::Exn<graylog_cli::domain::error::CliError>> {
+async fn run(command: Commands, service: &ApplicationService) -> Result<(), exn::Exn<CliError>> {
     match command {
         Commands::Auth(args) => {
+            let url: Url = args.url.parse().map_err(|_| {
+                CliError::Validation(ValidationError::InvalidValue {
+                    field: "url",
+                    message: "invalid URL format".to_string(),
+                })
+            })?;
             let status = service
-                .authenticate(args.url, SecretString::new(args.token.into()))
+                .authenticate(url, SecretString::new(args.token.into()))
                 .await?;
             emit_json_success(&status);
         }
@@ -132,8 +137,8 @@ where
     }
 }
 
-fn emit_cli_error(error: &exn::Exn<graylog_cli::domain::error::CliError>) -> ! {
-    let cli_error: &graylog_cli::domain::error::CliError = error;
+fn emit_cli_error(error: &exn::Exn<CliError>) -> ! {
+    let cli_error: &CliError = error;
     let exit_code = exit_code_for_cli_error(cli_error);
     let _ = print_error_json(&ErrorEnvelope::from_cli_error(cli_error));
     std::process::exit(exit_code);

@@ -1,130 +1,76 @@
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-
-use crate::domain::error::ValidationError;
+use url::Url;
 
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
 pub const DEFAULT_FIELDS_CACHE_TTL_SECONDS: u64 = 300;
 
+fn default_timeout_seconds() -> u64 {
+    DEFAULT_TIMEOUT_SECONDS
+}
 fn default_fields_cache_ttl() -> u64 {
     DEFAULT_FIELDS_CACHE_TTL_SECONDS
 }
+fn default_verify_tls() -> bool {
+    true
+}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub graylog: GraylogConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GraylogConfig {
-    pub base_url: String,
+    pub url: Url,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
     pub token: SecretString,
+    #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
-    pub verify_tls: bool,
-    pub fields_cache_ttl_seconds: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredConfig {
-    pub graylog: StoredGraylogConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredGraylogConfig {
-    pub url: String,
-    pub token: String,
-    pub timeout_seconds: u64,
+    #[serde(default = "default_verify_tls")]
     pub verify_tls: bool,
     #[serde(default = "default_fields_cache_ttl")]
     pub fields_cache_ttl_seconds: u64,
 }
 
+impl Clone for GraylogConfig {
+    fn clone(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            token: SecretString::new(self.token.expose_secret().to_owned().into()),
+            timeout_seconds: self.timeout_seconds,
+            verify_tls: self.verify_tls,
+            fields_cache_ttl_seconds: self.fields_cache_ttl_seconds,
+        }
+    }
+}
+
 impl GraylogConfig {
-    pub fn new(
-        base_url: impl Into<String>,
-        token: SecretString,
-        timeout_seconds: u64,
-        verify_tls: bool,
-        fields_cache_ttl_seconds: u64,
-    ) -> Result<Self, ValidationError> {
-        let base_url = normalize_url(base_url.into())?;
-
-        if timeout_seconds == 0 {
-            return Err(ValidationError::InvalidValue {
-                field: "graylog.timeout_seconds",
-                message: "must be greater than zero".to_string(),
-            });
-        }
-
-        if fields_cache_ttl_seconds == 0 {
-            return Err(ValidationError::InvalidValue {
-                field: "graylog.fields_cache_ttl_seconds",
-                message: "must be greater than zero".to_string(),
-            });
-        }
-
-        if token.expose_secret().trim().is_empty() {
-            return Err(ValidationError::EmptyField {
-                field: "graylog.token",
-            });
-        }
-
-        Ok(Self {
-            base_url,
+    pub fn new(url: Url, token: SecretString) -> Self {
+        Self {
+            url,
             token,
-            timeout_seconds,
-            verify_tls,
-            fields_cache_ttl_seconds,
-        })
-    }
-
-    pub fn to_stored(&self) -> StoredConfig {
-        StoredConfig::from_runtime(self)
-    }
-}
-
-pub fn normalize_url(value: impl Into<String>) -> Result<String, ValidationError> {
-    let normalized = value.into();
-    let trimmed = normalized.trim();
-
-    if trimmed.is_empty() {
-        return Err(ValidationError::EmptyField {
-            field: "graylog.url",
-        });
-    }
-
-    Ok(trimmed.trim_end_matches('/').to_string())
-}
-
-impl Default for StoredConfig {
-    fn default() -> Self {
-        Self {
-            graylog: StoredGraylogConfig {
-                url: String::new(),
-                token: String::new(),
-                timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-                verify_tls: true,
-                fields_cache_ttl_seconds: DEFAULT_FIELDS_CACHE_TTL_SECONDS,
-            },
+            timeout_seconds: default_timeout_seconds(),
+            verify_tls: default_verify_tls(),
+            fields_cache_ttl_seconds: default_fields_cache_ttl(),
         }
     }
 }
 
-impl StoredConfig {
-    pub fn from_runtime(config: &GraylogConfig) -> Self {
-        Self {
-            graylog: StoredGraylogConfig {
-                url: config.base_url.clone(),
-                token: config.token.expose_secret().to_owned(),
-                timeout_seconds: config.timeout_seconds,
-                verify_tls: config.verify_tls,
-                fields_cache_ttl_seconds: config.fields_cache_ttl_seconds,
-            },
-        }
-    }
+fn serialize_secret_string<S>(value: &SecretString, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value.expose_secret())
+}
 
-    pub fn into_runtime(self) -> Result<GraylogConfig, ValidationError> {
-        GraylogConfig::new(
-            self.graylog.url,
-            SecretString::new(self.graylog.token.into()),
-            self.graylog.timeout_seconds,
-            self.graylog.verify_tls,
-            self.graylog.fields_cache_ttl_seconds,
-        )
-    }
+fn deserialize_secret_string<'de, D>(deserializer: D) -> Result<SecretString, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(SecretString::new(s.into()))
 }

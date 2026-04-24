@@ -1,8 +1,7 @@
-use secrecy::SecretString;
+use secrecy::SecretBox;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::domain::config::StoredConfig;
 use crate::domain::timerange::CommandTimerange;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,8 +22,7 @@ pub enum SortDirection {
     Desc,
 }
 
-pub type PersistedConfig = StoredConfig;
-pub type RuntimeToken = SecretString;
+pub type RuntimeToken = SecretBox<String>;
 pub type JsonObject = Map<String, Value>;
 pub type NormalizedRow = JsonObject;
 
@@ -247,16 +245,14 @@ impl CommandStatus {
 pub struct AuthStatus {
     pub ok: bool,
     pub command: &'static str,
-    pub config_path: String,
     pub graylog_url: String,
 }
 
 impl AuthStatus {
-    pub fn ok(config_path: String, graylog_url: String) -> Self {
+    pub fn ok(graylog_url: String) -> Self {
         Self {
             ok: true,
             command: "auth",
-            config_path,
             graylog_url,
         }
     }

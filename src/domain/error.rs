@@ -3,34 +3,13 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error("configuration error: {0}")]
-    Config(#[from] ConfigError),
+    Config(String),
+    #[error("cache error: {0}")]
+    Cache(String),
     #[error("http error: {0}")]
     Http(#[from] HttpError),
     #[error("validation error: {0}")]
     Validation(#[from] ValidationError),
-}
-
-#[derive(Debug, Error)]
-pub enum ConfigError {
-    #[error("config store `{backend}` is unavailable: {message}")]
-    StoreUnavailable {
-        backend: &'static str,
-        message: String,
-    },
-    #[error("config is not initialized")]
-    NotConfigured,
-    #[error("invalid config format: {message}")]
-    InvalidFormat { message: String },
-    #[error("failed to serialize config: {message}")]
-    Serialization { message: String },
-    #[error("failed to deserialize config: {message}")]
-    Deserialization { message: String },
-    #[error("filesystem error while {operation} `{path}`: {message}")]
-    Filesystem {
-        operation: &'static str,
-        path: String,
-        message: String,
-    },
 }
 
 #[derive(Debug, Error)]

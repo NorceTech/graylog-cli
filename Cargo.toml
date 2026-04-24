@@ -11,7 +11,7 @@ dirs = "6"
 exn = "0.3"
 humantime = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-secrecy = "0.10"
+secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_with = "3"
@@ -20,3 +20,4 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toml = "1"
 time = { version = "0.3", features = ["parsing", "formatting"] }
+url = { version = "2", features = ["serde"] }

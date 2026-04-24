@@ -9,7 +9,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{Month, OffsetDateTime, Time, UtcOffset};
 
 use crate::application::ports::{GraylogGateway, GraylogGatewayFactory};
-use crate::domain::config::{GraylogConfig, StoredConfig};
+use crate::domain::config::GraylogConfig;
 use crate::domain::error::HttpError;
 use crate::domain::models::{
     AggregateSearchRequest, AggregateSearchResult, AggregationType, FieldsResult, JsonObject,
@@ -65,16 +65,6 @@ impl GraylogClient {
             })?;
 
         Ok(Self::new(http_client, config))
-    }
-
-    pub fn from_stored(config: StoredConfig) -> Result<Self, HttpError> {
-        let runtime_config = config
-            .into_runtime()
-            .map_err(|error| HttpError::RequestBuild {
-                message: format!("invalid stored Graylog config: {error}"),
-            })?;
-
-        Self::from_config(runtime_config)
     }
 
     pub fn http_client(&self) -> &Client {
@@ -178,7 +168,13 @@ impl GraylogClient {
     }
 
     fn request(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
-        let url = format!("{}{}", self.config.base_url, path);
+        let base_url = self
+            .config
+            .url
+            .to_string()
+            .trim_end_matches('/')
+            .to_string();
+        let url = format!("{base_url}{path}");
         let mut builder = self
             .http_client
             .request(method.clone(), url)
@@ -405,7 +401,7 @@ fn should_use_cardinality_fallback_rows(request: &AggregateSearchRequest) -> boo
 #[async_trait]
 impl GraylogGateway for GraylogClient {
     fn base_url(&self) -> &str {
-        &self.config.base_url
+        self.config.url.as_str()
     }
 
     async fn ping(&self) -> Result<(), HttpError> {
@@ -920,6 +916,9 @@ fn normalize_row(columns: &[String], row: Value) -> Result<NormalizedRow, HttpEr
             .cloned()
             .unwrap_or_else(|| format!("column_{index}"));
         let value = values.get(index).cloned().unwrap_or(Value::Null);
+        if is_empty_placeholder(&value) {
+            continue;
+        }
         normalized.insert(strip_field_prefix(&key), value);
     }
 
@@ -932,6 +931,16 @@ fn strip_field_prefix(key: &str) -> String {
     key.strip_prefix("field: ")
         .map(str::to_string)
         .unwrap_or_else(|| key.to_string())
+}
+
+/// Graylog uses "-" for missing fields and "null" as a string for null values.
+/// Filter these out so the output only contains meaningful data.
+fn is_empty_placeholder(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(s) => s == "-" || s == "null",
+        _ => false,
+    }
 }
 
 fn normalize_named_collection(

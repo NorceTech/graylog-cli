@@ -1,28 +1,20 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use async_trait::async_trait;
 use exn::ResultExt;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::ExposeSecret;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use url::Url;
 
-use crate::application::ports::{
-    ConfigStore, FieldsCacheStore, GraylogGateway, GraylogGatewayFactory,
-};
-use crate::domain::config::{
-    DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, GraylogConfig, StoredConfig,
-    normalize_url,
-};
-use crate::domain::error::CliError;
-use crate::domain::error::ConfigError;
-use crate::domain::error::HttpError;
-use crate::domain::error::ValidationError;
+use crate::application::ports::{CacheStore, ConfigStore, GraylogGateway, GraylogGatewayFactory};
+use crate::domain::config::{Config, GraylogConfig};
+use crate::domain::error::{CliError, HttpError, ValidationError};
 use crate::domain::models::{
-    AggregateCommandInput, AggregateSearchRequest, AggregateStatus, AuthStatus, CommandMetadata,
-    CommandStatus, FieldsStatus, MessageSearchRequest, MessageSearchStatus, NormalizedRow,
-    PingStatus, SearchCommandInput, SearchGroup, SortDirection, StreamFindStatus, StreamStatus,
-    StreamsStatus, SystemInfoStatus,
+    AggregateCommandInput, AggregateSearchRequest, AggregateStatus, AuthStatus, FieldsStatus,
+    MessageSearchRequest, MessageSearchStatus, NormalizedRow, PingStatus, SearchCommandInput,
+    SearchGroup, SortDirection, StreamFindStatus, StreamStatus, StreamsStatus, SystemInfoStatus,
 };
 
 const DEFAULT_SEARCH_LIMIT: u64 = 50;
@@ -30,50 +22,24 @@ const MAX_STREAM_SEARCH_LIMIT: u64 = 100;
 const DEFAULT_SEARCH_OFFSET: u64 = 0;
 const DEFAULT_SEARCH_SORT: &str = "timestamp";
 
+#[derive(Serialize, Deserialize)]
+struct CachedFields {
+    fields: Vec<String>,
+    fetched_at: u64,
+}
+
 #[derive(Clone)]
 pub struct ApplicationService {
     config_store: Arc<dyn ConfigStore>,
     gateway_factory: Arc<dyn GraylogGatewayFactory>,
-    fields_cache_store: Arc<dyn FieldsCacheStore>,
-}
-
-impl Default for ApplicationService {
-    fn default() -> Self {
-        Self::new()
-    }
+    fields_cache_store: Arc<dyn CacheStore>,
 }
 
 impl ApplicationService {
-    fn not_configured_error() -> CliError {
-        CliError::Config(ConfigError::NotConfigured)
-    }
-
-    pub fn new() -> Self {
-        Self::with_dependencies(
-            Arc::new(UnconfiguredConfigStore),
-            Arc::new(UnconfiguredGraylogGatewayFactory),
-            Arc::new(UnconfiguredFieldsCacheStore),
-        )
-    }
-
-    pub fn with_config_store<T>(config_store: Arc<T>) -> Self
-    where
-        T: ConfigStore + FieldsCacheStore + 'static,
-    {
-        let fields_cache_store: Arc<dyn FieldsCacheStore> = config_store.clone();
-        let config_store: Arc<dyn ConfigStore> = config_store;
-
-        Self::with_dependencies(
-            config_store,
-            Arc::new(UnconfiguredGraylogGatewayFactory),
-            fields_cache_store,
-        )
-    }
-
-    pub fn with_dependencies(
+    pub fn new(
         config_store: Arc<dyn ConfigStore>,
         gateway_factory: Arc<dyn GraylogGatewayFactory>,
-        fields_cache_store: Arc<dyn FieldsCacheStore>,
+        fields_cache_store: Arc<dyn CacheStore>,
     ) -> Self {
         Self {
             config_store,
@@ -82,63 +48,12 @@ impl ApplicationService {
         }
     }
 
-    pub async fn placeholder_success(
-        &self,
-        command: &'static str,
-    ) -> exn::Result<CommandStatus, CliError> {
-        Self::validate_command_name(command).map_err(CliError::from)?;
-
-        let configured = self
-            .config_store
-            .load()
-            .await
-            .or_raise(|| {
-                CliError::Config(ConfigError::StoreUnavailable {
-                    backend: "config-store",
-                    message: "failed to load runtime config".to_string(),
-                })
-            })?
-            .is_some();
-
-        Ok(CommandStatus::with_metadata(CommandMetadata {
-            command,
-            configured,
-        }))
-    }
-
-    pub async fn load_config(&self) -> exn::Result<Option<GraylogConfig>, CliError> {
-        self.config_store.load().await.or_raise(|| {
-            CliError::Config(ConfigError::StoreUnavailable {
-                backend: "config-store",
-                message: "failed to load runtime config".to_string(),
-            })
-        })
-    }
-
-    pub async fn require_config(&self) -> exn::Result<GraylogConfig, CliError> {
-        Ok(self
-            .load_config()
-            .await?
-            .ok_or_else(Self::not_configured_error)?)
-    }
-
-    pub async fn save_config(&self, config: StoredConfig) -> exn::Result<(), CliError> {
-        self.config_store.save(config).await.or_raise(|| {
-            CliError::Config(ConfigError::StoreUnavailable {
-                backend: "config-store",
-                message: "failed to persist config".to_string(),
-            })
-        })
-    }
-
     pub async fn authenticate(
         &self,
-        base_url: String,
-        token: SecretString,
+        base_url: Url,
+        token: secrecy::SecretString,
     ) -> exn::Result<AuthStatus, CliError> {
-        let normalized_url = normalize_url(base_url).map_err(CliError::from)?;
         let trimmed_token = token.expose_secret().trim().to_owned();
-
         if trimmed_token.is_empty() {
             return Err(CliError::Validation(ValidationError::EmptyField {
                 field: "graylog.token",
@@ -146,36 +61,17 @@ impl ApplicationService {
             .into());
         }
 
-        let runtime_config = GraylogConfig::new(
-            normalized_url.clone(),
-            SecretString::new(trimmed_token.into()),
-            DEFAULT_TIMEOUT_SECONDS,
-            true,
-            DEFAULT_FIELDS_CACHE_TTL_SECONDS,
-        )
-        .map_err(CliError::from)?;
-
-        let config_path = self.config_store.config_path().or_raise(|| {
-            CliError::Config(ConfigError::StoreUnavailable {
-                backend: "config-store",
-                message: "failed to resolve config path".to_string(),
-            })
-        })?;
+        let graylog_config = GraylogConfig::new(base_url.clone(), token);
+        let config = Config {
+            graylog: graylog_config,
+        };
 
         self.config_store
-            .save(runtime_config.to_stored())
+            .save(config)
             .await
-            .or_raise(|| {
-                CliError::Config(ConfigError::StoreUnavailable {
-                    backend: "config-store",
-                    message: "failed to persist config".to_string(),
-                })
-            })?;
+            .or_raise(|| CliError::Config("failed to persist config".to_string()))?;
 
-        Ok(AuthStatus::ok(
-            config_path.display().to_string(),
-            normalized_url,
-        ))
+        Ok(AuthStatus::ok(base_url.to_string()))
     }
 
     pub async fn search(
@@ -189,48 +85,45 @@ impl ApplicationService {
                 .config_store
                 .load()
                 .await
-                .or_raise(|| {
-                    CliError::Config(ConfigError::StoreUnavailable {
-                        backend: "config-store",
-                        message: "failed to load runtime config".to_string(),
-                    })
-                })?
-                .ok_or_else(Self::not_configured_error)?;
-            let config_path = self.config_store.config_path().or_raise(|| {
-                CliError::Config(ConfigError::StoreUnavailable {
-                    backend: "config-store",
-                    message: "failed to resolve config path".to_string(),
-                })
-            })?;
-            let ttl = config.fields_cache_ttl_seconds;
+                .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
+                .ok_or_else(|| {
+                    CliError::Config(
+                        "graylog is not configured, run `graylog-cli auth` first".to_string(),
+                    )
+                })?;
+            let ttl = config.graylog.fields_cache_ttl_seconds;
+            let cache_key = "fields".to_string();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
 
             let fields = match self
                 .fields_cache_store
-                .load_fields(&config_path, ttl)
+                .get_serialized(&cache_key)
                 .await
-                .or_raise(|| {
-                    CliError::Config(ConfigError::StoreUnavailable {
-                        backend: "fields-cache",
-                        message: "failed to load cached fields".to_string(),
-                    })
-                })? {
-                Some(fields) => fields,
-                None => {
-                    let client = self.graylog_gateway_with_config(config)?;
+                .ok()
+                .flatten()
+                .and_then(|serialized| serde_json::from_str::<CachedFields>(&serialized).ok())
+            {
+                Some(cached) if now.saturating_sub(cached.fetched_at) < ttl => cached.fields,
+                _ => {
+                    let client = self.graylog_gateway_with_config(config.graylog)?;
                     let result = client.list_fields().await.or_raise(|| {
                         CliError::Http(HttpError::Unavailable {
                             message: "failed to list fields".to_string(),
                         })
                     })?;
-                    self.fields_cache_store
-                        .save_fields(&config_path, &result.fields)
-                        .await
-                        .or_raise(|| {
-                            CliError::Config(ConfigError::StoreUnavailable {
-                                backend: "fields-cache",
-                                message: "failed to cache fields".to_string(),
-                            })
-                        })?;
+                    let cache_data = CachedFields {
+                        fields: result.fields.clone(),
+                        fetched_at: now,
+                    };
+                    if let Ok(serialized) = serde_json::to_string(&cache_data) {
+                        let _ = self
+                            .fields_cache_store
+                            .save_serialized(cache_key, serialized)
+                            .await;
+                    }
                     result.fields
                 }
             };
@@ -427,14 +320,6 @@ impl ApplicationService {
         })
     }
 
-    fn validate_command_name(command: &'static str) -> Result<(), ValidationError> {
-        if command.trim().is_empty() {
-            return Err(ValidationError::EmptyField { field: "command" });
-        }
-
-        Ok(())
-    }
-
     fn build_search_request(
         &self,
         input: SearchCommandInput,
@@ -495,14 +380,13 @@ impl ApplicationService {
             .config_store
             .load()
             .await
-            .or_raise(|| {
-                CliError::Config(ConfigError::StoreUnavailable {
-                    backend: "config-store",
-                    message: "failed to load runtime config".to_string(),
-                })
-            })?
-            .ok_or_else(Self::not_configured_error)?;
-        let client = self.graylog_gateway_with_config(config)?;
+            .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
+            .ok_or_else(|| {
+                CliError::Config(
+                    "graylog is not configured, run `graylog-cli auth` first".to_string(),
+                )
+            })?;
+        let client = self.graylog_gateway_with_config(config.graylog)?;
         let result = client.search_messages(request.clone()).await.or_raise(|| {
             CliError::Http(HttpError::Unavailable {
                 message: "message search failed".to_string(),
@@ -534,14 +418,13 @@ impl ApplicationService {
             .config_store
             .load()
             .await
-            .or_raise(|| {
-                CliError::Config(ConfigError::StoreUnavailable {
-                    backend: "config-store",
-                    message: "failed to load runtime config".to_string(),
-                })
-            })?
-            .ok_or_else(Self::not_configured_error)?;
-        let client = self.graylog_gateway_with_config(config)?;
+            .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
+            .ok_or_else(|| {
+                CliError::Config(
+                    "graylog is not configured, run `graylog-cli auth` first".to_string(),
+                )
+            })?;
+        let client = self.graylog_gateway_with_config(config.graylog)?;
         let mut request = self.build_search_request(input.clone(), DEFAULT_SEARCH_LIMIT);
         let mut all_messages = Vec::new();
         let mut metadata = serde_json::Map::new();
@@ -641,14 +524,13 @@ impl ApplicationService {
             .config_store
             .load()
             .await
-            .or_raise(|| {
-                CliError::Config(ConfigError::StoreUnavailable {
-                    backend: "config-store",
-                    message: "failed to load runtime config".to_string(),
-                })
-            })?
-            .ok_or_else(Self::not_configured_error)?;
-        let client = self.graylog_gateway_with_config(config)?;
+            .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
+            .ok_or_else(|| {
+                CliError::Config(
+                    "graylog is not configured, run `graylog-cli auth` first".to_string(),
+                )
+            })?;
+        let client = self.graylog_gateway_with_config(config.graylog)?;
         let aggregation_type = request.aggregation_type.as_cli_value();
         let result = client.search_aggregate(request).await.or_raise(|| {
             CliError::Http(HttpError::Unavailable {
@@ -670,15 +552,14 @@ impl ApplicationService {
             .config_store
             .load()
             .await
-            .or_raise(|| {
-                CliError::Config(ConfigError::StoreUnavailable {
-                    backend: "config-store",
-                    message: "failed to load runtime config".to_string(),
-                })
-            })?
-            .ok_or_else(Self::not_configured_error)?;
+            .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
+            .ok_or_else(|| {
+                CliError::Config(
+                    "graylog is not configured, run `graylog-cli auth` first".to_string(),
+                )
+            })?;
 
-        self.graylog_gateway_with_config(config)
+        self.graylog_gateway_with_config(config.graylog)
     }
 
     fn graylog_gateway_with_config(
@@ -737,69 +618,4 @@ fn parse_timestamp_to_millis(ts: &str) -> Option<i64> {
     use time::format_description::well_known::Rfc3339;
     let dt = time::OffsetDateTime::parse(ts, &Rfc3339).ok()?;
     Some(dt.unix_timestamp() * 1000 + dt.millisecond() as i64)
-}
-
-struct UnconfiguredConfigStore;
-struct UnconfiguredGraylogGatewayFactory;
-struct UnconfiguredFieldsCacheStore;
-
-#[async_trait]
-impl ConfigStore for UnconfiguredConfigStore {
-    fn config_path(&self) -> Result<PathBuf, ConfigError> {
-        Err(ConfigError::StoreUnavailable {
-            backend: "unconfigured",
-            message: "no config store has been attached to ApplicationService".to_string(),
-        })
-    }
-
-    async fn load(&self) -> Result<Option<GraylogConfig>, ConfigError> {
-        Err(ConfigError::StoreUnavailable {
-            backend: "unconfigured",
-            message: "no config store has been attached to ApplicationService".to_string(),
-        })
-    }
-
-    async fn save(&self, _config: StoredConfig) -> Result<(), ConfigError> {
-        Err(ConfigError::StoreUnavailable {
-            backend: "unconfigured",
-            message: "no config store has been attached to ApplicationService".to_string(),
-        })
-    }
-}
-
-impl GraylogGatewayFactory for UnconfiguredGraylogGatewayFactory {
-    fn build_from_config(
-        &self,
-        _config: GraylogConfig,
-    ) -> Result<Arc<dyn GraylogGateway>, HttpError> {
-        Err(HttpError::RequestBuild {
-            message: "no Graylog gateway factory has been attached to ApplicationService"
-                .to_string(),
-        })
-    }
-}
-
-#[async_trait]
-impl FieldsCacheStore for UnconfiguredFieldsCacheStore {
-    async fn load_fields(
-        &self,
-        _config_path: &std::path::Path,
-        _ttl_seconds: u64,
-    ) -> Result<Option<Vec<String>>, ConfigError> {
-        Err(ConfigError::StoreUnavailable {
-            backend: "unconfigured",
-            message: "no fields cache store has been attached to ApplicationService".to_string(),
-        })
-    }
-
-    async fn save_fields(
-        &self,
-        _config_path: &std::path::Path,
-        _fields: &[String],
-    ) -> Result<(), ConfigError> {
-        Err(ConfigError::StoreUnavailable {
-            backend: "unconfigured",
-            message: "no fields cache store has been attached to ApplicationService".to_string(),
-        })
-    }
 }

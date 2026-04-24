@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use serde::Serialize;
 
-use crate::domain::error::{CliError, ConfigError, HttpError};
+use crate::domain::error::{CliError, HttpError};
 
 #[derive(Debug, Serialize)]
 pub struct ErrorEnvelope {
@@ -24,19 +24,11 @@ impl ErrorEnvelope {
     }
 
     pub fn from_cli_error(error: &CliError) -> Self {
-        match error {
-            CliError::Config(ConfigError::NotConfigured) => Self {
-                ok: false,
-                code: error_kind_for_cli_error(error),
-                message: safe_cli_error_message(error),
-                hint: Some(AUTH_HINT.to_string()),
-            },
-            _ => Self {
-                ok: false,
-                code: error_kind_for_cli_error(error),
-                message: safe_cli_error_message(error),
-                hint: None,
-            },
+        Self {
+            ok: false,
+            code: error_kind_for_cli_error(error),
+            message: safe_cli_error_message(error),
+            hint: None,
         }
     }
 }
@@ -63,7 +55,7 @@ where
 
 pub fn exit_code_for_cli_error(error: &CliError) -> i32 {
     match error {
-        CliError::Validation(_) | CliError::Config(_) => 2,
+        CliError::Validation(_) | CliError::Config(_) | CliError::Cache(_) => 2,
         CliError::Http(http_error) => exit_code_for_http_error(http_error),
     }
 }
@@ -82,18 +74,9 @@ fn exit_code_for_http_error(error: &HttpError) -> i32 {
 fn error_kind_for_cli_error(error: &CliError) -> &'static str {
     match error {
         CliError::Validation(_) => "validation_error",
-        CliError::Config(config_error) => error_kind_for_config_error(config_error),
+        CliError::Config(_) => "config_error",
+        CliError::Cache(_) => "internal_error",
         CliError::Http(http_error) => error_kind_for_http_error(http_error),
-    }
-}
-
-fn error_kind_for_config_error(error: &ConfigError) -> &'static str {
-    match error {
-        ConfigError::NotConfigured
-        | ConfigError::InvalidFormat { .. }
-        | ConfigError::Serialization { .. }
-        | ConfigError::Deserialization { .. } => "config_error",
-        ConfigError::StoreUnavailable { .. } | ConfigError::Filesystem { .. } => "internal_error",
     }
 }
 
@@ -114,20 +97,10 @@ fn error_kind_for_http_error(error: &HttpError) -> &'static str {
 
 fn safe_cli_error_message(error: &CliError) -> String {
     match error {
-        CliError::Config(config_error) => safe_config_error_message(config_error),
+        CliError::Config(_) => "configuration error".to_string(),
+        CliError::Cache(_) => "cache error".to_string(),
         CliError::Http(http_error) => safe_http_error_message(http_error),
         CliError::Validation(_) => error.to_string(),
-    }
-}
-
-fn safe_config_error_message(error: &ConfigError) -> String {
-    match error {
-        ConfigError::NotConfigured => error.to_string(),
-        ConfigError::InvalidFormat { .. } | ConfigError::Deserialization { .. } => {
-            "configuration file is invalid".to_string()
-        }
-        ConfigError::Serialization { .. } => "failed to serialize configuration file".to_string(),
-        ConfigError::StoreUnavailable { .. } | ConfigError::Filesystem { .. } => error.to_string(),
     }
 }
 
@@ -166,15 +139,12 @@ mod tests {
 
     #[test]
     fn malformed_config_messages_are_sanitized() {
-        let secret = "token = \"super-secret-token\"";
-        let error = CliError::Config(ConfigError::Deserialization {
-            message: format!("TOML parse error near {secret}"),
-        });
+        let error = CliError::Config("TOML parse error near super-secret-token".to_string());
 
         let envelope = ErrorEnvelope::from_cli_error(&error);
 
         assert_eq!(envelope.code, "config_error");
-        assert_eq!(envelope.message, "configuration file is invalid");
+        assert_eq!(envelope.message, "configuration error");
         assert!(!envelope.message.contains("super-secret-token"));
     }
 }
