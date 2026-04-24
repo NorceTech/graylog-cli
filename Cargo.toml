@@ -2,6 +2,7 @@
 name = "graylog-cli"
 version = "0.0.3-alpha"
 edition = "2024"
+rust-version = "1.85"
 publish = false
 
 [dependencies]
