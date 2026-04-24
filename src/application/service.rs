@@ -458,11 +458,21 @@ impl ApplicationService {
 
             request.offset += fetched as u64;
 
-            if fetched == 0
-                || total_results.is_some_and(|total| request.offset >= total)
-                || fetched < request.limit as usize
-            {
+            if fetched == 0 {
                 break;
+            }
+
+            match total_results {
+                Some(total) => {
+                    if request.offset >= total {
+                        break;
+                    }
+                }
+                None => {
+                    if fetched < request.limit as usize {
+                        break;
+                    }
+                }
             }
         }
 
@@ -1473,6 +1483,33 @@ mod tests {
         let status = service.search(input).await.expect("search should succeed");
         assert_eq!(status.messages.len(), 300);
         assert_eq!(gateway.search_requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn search_all_pages_continues_past_short_page_when_total_known() {
+        let gateway = FakeGraylogGateway::with_search_results(vec![
+            make_search_messages_result(rows(500), Some(1_250), Map::new()),
+            make_search_messages_result(rows(250), Some(1_250), Map::new()),
+            make_search_messages_result(rows(500), Some(1_250), Map::new()),
+        ]);
+        let (service, gateway, _) = service_with_gateway(
+            FakeConfigStore::new(test_config()),
+            FakeCacheStore::default(),
+            gateway,
+        );
+        let mut input = make_search_input();
+        input.all_pages = true;
+        let status = service.search(input).await.expect("search should succeed");
+        let requests = gateway.search_requests();
+        assert_eq!(status.messages.len(), 1_250);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.offset)
+                .collect::<Vec<_>>(),
+            vec![0, 500, 750]
+        );
+        assert!(requests.iter().all(|request| request.limit == 500));
     }
 
     #[tokio::test]
