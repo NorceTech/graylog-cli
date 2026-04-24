@@ -23,6 +23,17 @@ toml = "1"
 time = { version = "0.3", features = ["parsing", "formatting"] }
 url = { version = "2", features = ["serde"] }
 
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "timerange_parsing"
+harness = false
+
+[[bench]]
+name = "json_normalization"
+harness = false
+
 [profile.dev]
 debug = 0
 
