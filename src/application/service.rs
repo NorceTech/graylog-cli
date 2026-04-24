@@ -61,9 +61,17 @@ impl ApplicationService {
             .into());
         }
 
+        let existing_updater = self
+            .config_store
+            .load()
+            .await
+            .or_raise(|| CliError::Config("failed to load existing config".to_string()))?
+            .map(|config| config.updater)
+            .unwrap_or_default();
         let graylog_config = GraylogConfig::new(base_url.clone(), token);
         let config = Config {
             graylog: graylog_config,
+            updater: existing_updater,
         };
 
         self.config_store
@@ -629,7 +637,9 @@ mod tests {
 
     use crate::application::ports::cache_store::CacheError;
     use crate::application::ports::config_store::ConfigError;
-    use crate::domain::config::{DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS};
+    use crate::domain::config::{
+        DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, UpdaterConfig,
+    };
     use crate::domain::models::{
         AggregateSearchResult, AggregationType, FieldsResult, JsonObject, MessageSearchResult,
         StreamResult, StreamsResult, SystemResult,
@@ -956,6 +966,7 @@ mod tests {
                 Url::parse("http://localhost:9000").expect("test URL should parse"),
                 secrecy::SecretString::new("test-token".to_owned().into()),
             ),
+            updater: UpdaterConfig::default(),
         }
     }
 
@@ -1108,6 +1119,30 @@ mod tests {
             saved.graylog.fields_cache_ttl_seconds,
             DEFAULT_FIELDS_CACHE_TTL_SECONDS
         );
+    }
+
+    #[tokio::test]
+    async fn authenticate_preserves_existing_updater_settings() {
+        let mut seed = test_config();
+        seed.updater.disable_auto_update = true;
+        let config_store = FakeConfigStore::new(seed);
+        let (service, _, _) = service_with_gateway(
+            config_store.clone(),
+            FakeCacheStore::default(),
+            FakeGraylogGateway::new(),
+        );
+        service
+            .authenticate(
+                Url::parse("http://localhost:9000").expect("test URL should parse"),
+                secrecy::SecretString::new("new-token".to_owned().into()),
+            )
+            .await
+            .expect("authentication should succeed");
+        let saved = config_store
+            .saved_config()
+            .expect("config should be saved after authentication");
+        assert!(saved.updater.disable_auto_update);
+        assert_eq!(saved.graylog.token.expose_secret(), "new-token");
     }
 
     #[tokio::test]

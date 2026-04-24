@@ -63,4 +63,13 @@ Upgrade to the latest release in place:
 graylog-cli upgrade
 ```
 
-Every successful command also fires a detached background check (throttled to once per 24h). If a newer release exists, the new binary is downloaded to the config directory and swapped in on the next start. Set `GRAYLOG_CLI_AUTO_UPDATE=0` to opt out.
+Every successful command also fires a detached background check (throttled to once per 24h). If a newer release exists, the new binary is downloaded to the config directory and swapped in on the next start.
+
+Opt out persistently by adding this to your `config.toml`:
+
+```toml
+[updater]
+disable_auto_update = true
+```
+
+Or opt out for a single invocation with `GRAYLOG_CLI_AUTO_UPDATE=0` (the env var, when set, takes precedence over the config setting).

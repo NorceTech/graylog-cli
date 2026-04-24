@@ -18,6 +18,14 @@ fn default_verify_tls() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub graylog: GraylogConfig,
+    #[serde(default)]
+    pub updater: UpdaterConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdaterConfig {
+    #[serde(default)]
+    pub disable_auto_update: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,7 +88,10 @@ mod tests {
     use secrecy::{ExposeSecret, SecretString};
     use url::Url;
 
-    use super::{Config, DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, GraylogConfig};
+    use super::{
+        Config, DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, GraylogConfig,
+        UpdaterConfig,
+    };
 
     fn test_config() -> Config {
         Config {
@@ -91,6 +102,7 @@ mod tests {
                 verify_tls: false,
                 fields_cache_ttl_seconds: 123,
             },
+            updater: UpdaterConfig::default(),
         }
     }
 
@@ -189,5 +201,34 @@ mod tests {
             config.graylog.fields_cache_ttl_seconds,
             DEFAULT_FIELDS_CACHE_TTL_SECONDS
         );
+    }
+
+    #[test]
+    fn config_deserialization_defaults_disable_auto_update_to_false() {
+        let toml = r#"
+            [graylog]
+            url = "https://graylog.example.com"
+            token = "test-token"
+        "#;
+
+        let config: Config = toml::from_str(toml).expect("config should deserialize");
+
+        assert!(!config.updater.disable_auto_update);
+    }
+
+    #[test]
+    fn config_deserialization_reads_disable_auto_update_override() {
+        let toml = r#"
+            [graylog]
+            url = "https://graylog.example.com"
+            token = "test-token"
+
+            [updater]
+            disable_auto_update = true
+        "#;
+
+        let config: Config = toml::from_str(toml).expect("config should deserialize");
+
+        assert!(config.updater.disable_auto_update);
     }
 }

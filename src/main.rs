@@ -3,6 +3,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use clap::Parser;
+use graylog_cli::application::ports::config_store::ConfigStore;
 use graylog_cli::application::service::ApplicationService;
 use graylog_cli::application::updater_service::{
     DEFAULT_CHECK_INTERVAL_SECONDS, UpdaterService,
@@ -54,7 +55,7 @@ async fn main() {
     }
 
     if let Some(updater) = updater.as_ref()
-        && auto_update_enabled()
+        && auto_update_enabled(config_store.as_ref()).await
         && updater.should_check_now(DEFAULT_CHECK_INTERVAL_SECONDS).await
     {
         spawn_background_worker();
@@ -190,10 +191,13 @@ fn staged_binary_path() -> Option<PathBuf> {
     Some(dir.join(filename))
 }
 
-fn auto_update_enabled() -> bool {
-    match std::env::var(AUTO_UPDATE_ENV) {
-        Ok(value) => !matches!(value.trim(), "0" | "false" | "no" | "off"),
-        Err(_) => true,
+async fn auto_update_enabled(config_store: &dyn ConfigStore) -> bool {
+    if let Ok(value) = std::env::var(AUTO_UPDATE_ENV) {
+        return !matches!(value.trim(), "0" | "false" | "no" | "off");
+    }
+    match config_store.load().await {
+        Ok(Some(config)) => !config.updater.disable_auto_update,
+        _ => true,
     }
 }
 
