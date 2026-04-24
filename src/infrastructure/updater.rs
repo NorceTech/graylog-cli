@@ -6,7 +6,8 @@ use serde::Deserialize;
 
 use crate::application::ports::updater::{ReleaseInfo, UpdaterError, UpdaterGateway};
 
-const DEFAULT_RELEASES_URL: &str = "https://api.github.com/repos/NorceTech/graylog-cli/releases/latest";
+const DEFAULT_RELEASES_URL: &str =
+    "https://api.github.com/repos/NorceTech/graylog-cli/releases/latest";
 const USER_AGENT: &str = concat!("graylog-cli/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone)]

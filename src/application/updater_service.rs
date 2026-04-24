@@ -222,7 +222,9 @@ impl UpdaterService {
         self.cache_store
             .save_serialized(PENDING_UPGRADE_KEY.to_string(), serialized)
             .await
-            .map_err(|error| UpdaterError::Apply(format!("failed to record pending upgrade: {error}")))
+            .map_err(|error| {
+                UpdaterError::Apply(format!("failed to record pending upgrade: {error}"))
+            })
     }
 
     async fn clear_pending(&self) {
@@ -232,11 +234,7 @@ impl UpdaterService {
             .await;
     }
 
-    async fn stage_atomic(
-        &self,
-        version: &str,
-        bytes: Vec<u8>,
-    ) -> Result<PathBuf, UpdaterError> {
+    async fn stage_atomic(&self, version: &str, bytes: Vec<u8>) -> Result<PathBuf, UpdaterError> {
         let staged_dir = self.staged_dir.clone();
         let final_path = self.staged_path_for(version);
 
@@ -254,10 +252,7 @@ impl UpdaterService {
                 UpdaterError::Apply(format!("failed to sync staged binary: {error}"))
             })?;
             temp.persist(&final_path).map_err(|error| {
-                UpdaterError::Apply(format!(
-                    "failed to persist staged binary: {}",
-                    error.error
-                ))
+                UpdaterError::Apply(format!("failed to persist staged binary: {}", error.error))
             })?;
 
             #[cfg(unix)]
@@ -272,9 +267,7 @@ impl UpdaterService {
             Ok(final_path)
         })
         .await
-        .map_err(|error| {
-            UpdaterError::Apply(format!("failed to join staging task: {error}"))
-        })?
+        .map_err(|error| UpdaterError::Apply(format!("failed to join staging task: {error}")))?
     }
 }
 
@@ -452,7 +445,9 @@ mod tests {
     #[test]
     fn parse_version_accepts_v_prefix() {
         assert_eq!(
-            parse_version("v0.1.0").expect("version should parse").to_string(),
+            parse_version("v0.1.0")
+                .expect("version should parse")
+                .to_string(),
             "0.1.0"
         );
     }
@@ -505,8 +500,7 @@ mod tests {
     #[tokio::test]
     async fn stage_update_uses_versioned_filename() {
         let dir = TempDir::new().expect("temp dir should create");
-        let (service, _, _) =
-            make_service(dir.path(), "0.1.0", "0.2.0", vec![0xAAu8; 1024]);
+        let (service, _, _) = make_service(dir.path(), "0.1.0", "0.2.0", vec![0xAAu8; 1024]);
         service
             .stage_update_if_newer()
             .await

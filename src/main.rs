@@ -6,9 +6,7 @@ use clap::Parser;
 use graylog_cli::application::ports::config_store::ConfigStore;
 use graylog_cli::application::ports::updater::UpdaterError;
 use graylog_cli::application::service::ApplicationService;
-use graylog_cli::application::updater_service::{
-    DEFAULT_CHECK_INTERVAL_SECONDS, UpdaterService,
-};
+use graylog_cli::application::updater_service::{DEFAULT_CHECK_INTERVAL_SECONDS, UpdaterService};
 use graylog_cli::domain::error::CliError;
 use graylog_cli::domain::error::ValidationError;
 use graylog_cli::infrastructure::config_store::FileConfigStore;
@@ -57,7 +55,9 @@ async fn main() {
 
     if let Some(updater) = updater.as_ref()
         && auto_update_enabled(config_store.as_ref()).await
-        && updater.should_check_now(DEFAULT_CHECK_INTERVAL_SECONDS).await
+        && updater
+            .should_check_now(DEFAULT_CHECK_INTERVAL_SECONDS)
+            .await
     {
         spawn_background_worker();
     }
