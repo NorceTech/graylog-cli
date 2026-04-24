@@ -48,6 +48,11 @@ pub enum Commands {
     Ping,
     /// List all indexed fields.
     Fields,
+    /// Upgrade graylog-cli to the latest released version.
+    Upgrade,
+    /// Internal: background worker that checks for updates and stages a newer binary.
+    #[command(name = "__self-update-worker", hide = true)]
+    SelfUpdateWorker,
 }
 
 impl Commands {
@@ -66,6 +71,7 @@ impl Commands {
             Self::Streams { command } => command.validate(),
             Self::System { .. } => Ok(()),
             Self::Fields => Ok(()),
+            Self::Upgrade | Self::SelfUpdateWorker => Ok(()),
         }
     }
 }

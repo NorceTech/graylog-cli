@@ -54,3 +54,13 @@ Credentials are persisted locally for subsequent commands.
 graylog-cli --help
 graylog-cli <command> --help
 ```
+
+### Updates
+
+Upgrade to the latest release in place:
+
+```sh
+graylog-cli upgrade
+```
+
+Every successful command also fires a detached background check (throttled to once per 24h). If a newer release exists, the new binary is downloaded to the config directory and swapped in on the next start. Set `GRAYLOG_CLI_AUTO_UPDATE=0` to opt out.

@@ -57,6 +57,7 @@ pub fn exit_code_for_cli_error(error: &CliError) -> i32 {
     match error {
         CliError::Validation(_) | CliError::Config(_) | CliError::Cache(_) => 2,
         CliError::Http(http_error) => exit_code_for_http_error(http_error),
+        CliError::Update(_) => 6,
     }
 }
 
@@ -77,6 +78,7 @@ fn error_kind_for_cli_error(error: &CliError) -> &'static str {
         CliError::Config(_) => "config_error",
         CliError::Cache(_) => "internal_error",
         CliError::Http(http_error) => error_kind_for_http_error(http_error),
+        CliError::Update(_) => "update_error",
     }
 }
 
@@ -99,6 +101,7 @@ fn safe_cli_error_message(error: &CliError) -> String {
         CliError::Cache(_) => "cache error".to_string(),
         CliError::Http(http_error) => safe_http_error_message(http_error),
         CliError::Validation(_) => error.to_string(),
+        CliError::Update(update_error) => update_error.to_string(),
     }
 }
 
