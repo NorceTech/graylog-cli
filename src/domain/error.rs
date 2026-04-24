@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::application::ports::updater::UpdaterError;
+
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error("configuration error: {0}")]
@@ -10,6 +12,8 @@ pub enum CliError {
     Http(#[from] HttpError),
     #[error("validation error: {0}")]
     Validation(#[from] ValidationError),
+    #[error("update error: {0}")]
+    Update(#[from] UpdaterError),
 }
 
 #[derive(Debug, Clone, Error)]

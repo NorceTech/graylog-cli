@@ -1,16 +1,29 @@
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+
 use clap::Parser;
+use graylog_cli::application::ports::config_store::ConfigStore;
+use graylog_cli::application::ports::updater::UpdaterError;
 use graylog_cli::application::service::ApplicationService;
+use graylog_cli::application::updater_service::{
+    DEFAULT_CHECK_INTERVAL_SECONDS, UpdaterService,
+};
 use graylog_cli::domain::error::CliError;
 use graylog_cli::domain::error::ValidationError;
 use graylog_cli::infrastructure::config_store::FileConfigStore;
 use graylog_cli::infrastructure::graylog_client::ReqwestGraylogGatewayFactory;
+use graylog_cli::infrastructure::updater::GitHubUpdaterGateway;
 use graylog_cli::presentation::cli::{Cli, Commands, StreamsCommands, SystemCommands};
 use graylog_cli::presentation::output::{
     ErrorEnvelope, exit_code_for_cli_error, print_error_json, print_json,
 };
 use secrecy::SecretString;
-use std::sync::Arc;
 use url::Url;
+
+const WORKER_ARG: &str = "__self-update-worker";
+const AUTO_UPDATE_ENV: &str = "GRAYLOG_CLI_AUTO_UPDATE";
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() {
@@ -27,11 +40,26 @@ async fn main() {
     let service = ApplicationService::new(
         config_store.clone(),
         Arc::new(ReqwestGraylogGatewayFactory),
-        config_store,
+        config_store.clone(),
     );
 
-    if let Err(error) = run(cli.command, &service).await {
+    let updater = build_updater_service(config_store.clone());
+
+    if !matches!(cli.command, Commands::SelfUpdateWorker)
+        && let Some(updater) = updater.as_ref()
+    {
+        let _ = updater.apply_pending_upgrade().await;
+    }
+
+    if let Err(error) = run(cli.command, &service, updater.as_deref()).await {
         emit_cli_error(&error);
+    }
+
+    if let Some(updater) = updater.as_ref()
+        && auto_update_enabled(config_store.as_ref()).await
+        && updater.should_check_now(DEFAULT_CHECK_INTERVAL_SECONDS).await
+    {
+        spawn_background_worker();
     }
 }
 
@@ -46,7 +74,11 @@ fn parse_cli() -> Result<Cli, i32> {
     }
 }
 
-async fn run(command: Commands, service: &ApplicationService) -> Result<(), exn::Exn<CliError>> {
+async fn run(
+    command: Commands,
+    service: &ApplicationService,
+    updater: Option<&UpdaterService>,
+) -> Result<(), exn::Exn<CliError>> {
     match command {
         Commands::Auth(args) => {
             let url: Url = args.url.parse().map_err(|_| {
@@ -122,9 +154,61 @@ async fn run(command: Commands, service: &ApplicationService) -> Result<(), exn:
         Commands::Ping => {
             emit_json_success(&service.ping().await?);
         }
+        Commands::Upgrade => {
+            let updater = updater.ok_or_else(|| {
+                CliError::Update(UpdaterError::Unavailable(
+                    "updater is not available for this build".to_string(),
+                ))
+            })?;
+            let status = updater.upgrade_now().await.map_err(CliError::from)?;
+            emit_json_success(&status);
+        }
+        Commands::SelfUpdateWorker => {
+            if let Some(updater) = updater {
+                let _ = updater.stage_update_if_newer().await;
+            }
+        }
     }
 
     Ok(())
+}
+
+fn build_updater_service(cache_store: Arc<FileConfigStore>) -> Option<Arc<UpdaterService>> {
+    let gateway = GitHubUpdaterGateway::new().ok()?;
+    let staged_dir = staged_binary_dir()?;
+    Some(Arc::new(UpdaterService::new(
+        Arc::new(gateway),
+        cache_store,
+        CURRENT_VERSION.to_string(),
+        staged_dir,
+    )))
+}
+
+fn staged_binary_dir() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("graylog-cli"))
+}
+
+async fn auto_update_enabled(config_store: &dyn ConfigStore) -> bool {
+    if let Ok(value) = std::env::var(AUTO_UPDATE_ENV) {
+        return !matches!(value.trim(), "0" | "false" | "no" | "off");
+    }
+    match config_store.load().await {
+        Ok(Some(config)) => !config.updater.disable_auto_update,
+        _ => true,
+    }
+}
+
+fn spawn_background_worker() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = Command::new(exe)
+        .arg(WORKER_ARG)
+        .env(AUTO_UPDATE_ENV, "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
 }
 
 fn emit_json_success<T>(value: &T)
