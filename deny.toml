@@ -10,15 +10,17 @@ wildcards = "deny"
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
-    "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
     "MIT",
     "MPL-2.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
-    "Zlib",
     "CC0-1.0",
-    "OpenSSL",
 ]
 confidence-threshold = 0.9
+
+[licenses.private]
+# graylog-cli itself is marked `publish = false` in Cargo.toml — this tool
+# ships as a binary via GitHub Releases, not to crates.io, so it has no
+# project license and cargo-deny should skip license checks for it.
+ignore = true
