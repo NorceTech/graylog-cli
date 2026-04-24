@@ -132,6 +132,9 @@ fn invalid_relative_timerange(value: &str) -> ValidationError {
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::error::ValidationError;
+
+    use super::{AbsoluteTimerange, TimerangeInput};
     use super::{CommandTimerange, RelativeTimerange};
 
     #[test]
@@ -158,5 +161,184 @@ mod tests {
                 .to_string()
                 .contains("must use a positive duration like 15m, 1h, 5d, or 1w")
         );
+    }
+
+    #[test]
+    fn absolute_timerange_rejects_identical_from_to() {
+        let error = AbsoluteTimerange::new("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+            .expect_err("identical absolute bounds should fail");
+
+        assert!(matches!(error, ValidationError::InvalidTimerange { .. }));
+    }
+
+    #[test]
+    fn absolute_timerange_accepts_different_from_to() {
+        let timerange = AbsoluteTimerange::new("2026-01-01T00:00:00Z", "2026-01-01T01:00:00Z")
+            .expect("different absolute bounds should parse");
+
+        assert_eq!(timerange.from(), "2026-01-01T00:00:00Z");
+        assert_eq!(timerange.to(), "2026-01-01T01:00:00Z");
+    }
+
+    #[test]
+    fn timerange_input_relative_only() {
+        let input = TimerangeInput {
+            relative: Some("15m".to_string()),
+            from: None,
+            to: None,
+        };
+
+        let timerange = CommandTimerange::from_input(input).expect("relative input should parse");
+
+        assert!(matches!(timerange, CommandTimerange::Relative(_)));
+    }
+
+    #[test]
+    fn timerange_input_absolute_from_to() {
+        let input = TimerangeInput {
+            relative: None,
+            from: Some("2026-01-01T00:00:00Z".to_string()),
+            to: Some("2026-01-01T01:00:00Z".to_string()),
+        };
+
+        let timerange = CommandTimerange::from_input(input).expect("absolute input should parse");
+
+        assert!(matches!(timerange, CommandTimerange::Absolute(_)));
+    }
+
+    #[test]
+    fn timerange_input_rejects_mixed_relative_and_from() {
+        let input = TimerangeInput {
+            relative: Some("5m".to_string()),
+            from: Some("2026-01-01T00:00:00Z".to_string()),
+            to: None,
+        };
+
+        let error = CommandTimerange::from_input(input).expect_err("mixed input should fail");
+
+        assert!(matches!(
+            error,
+            ValidationError::MutuallyExclusiveFields { .. }
+        ));
+    }
+
+    #[test]
+    fn timerange_input_rejects_mixed_relative_and_to() {
+        let input = TimerangeInput {
+            relative: Some("5m".to_string()),
+            from: None,
+            to: Some("2026-01-01T01:00:00Z".to_string()),
+        };
+
+        let error = CommandTimerange::from_input(input).expect_err("mixed input should fail");
+
+        assert!(matches!(
+            error,
+            ValidationError::MutuallyExclusiveFields { .. }
+        ));
+    }
+
+    #[test]
+    fn timerange_input_rejects_mixed_all_three() {
+        let input = TimerangeInput {
+            relative: Some("5m".to_string()),
+            from: Some("2026-01-01T00:00:00Z".to_string()),
+            to: Some("2026-01-01T01:00:00Z".to_string()),
+        };
+
+        let error = CommandTimerange::from_input(input).expect_err("mixed input should fail");
+
+        assert!(matches!(
+            error,
+            ValidationError::MutuallyExclusiveFields { .. }
+        ));
+    }
+
+    #[test]
+    fn timerange_input_rejects_from_without_to() {
+        let input = TimerangeInput {
+            relative: None,
+            from: Some("2026-01-01T00:00:00Z".to_string()),
+            to: None,
+        };
+
+        let error = CommandTimerange::from_input(input).expect_err("missing to should fail");
+
+        assert!(matches!(
+            error,
+            ValidationError::MissingField {
+                field: "timerange.to"
+            }
+        ));
+    }
+
+    #[test]
+    fn timerange_input_rejects_to_without_from() {
+        let input = TimerangeInput {
+            relative: None,
+            from: None,
+            to: Some("2026-01-01T01:00:00Z".to_string()),
+        };
+
+        let error = CommandTimerange::from_input(input).expect_err("missing from should fail");
+
+        assert!(matches!(
+            error,
+            ValidationError::MissingField {
+                field: "timerange.from"
+            }
+        ));
+    }
+
+    #[test]
+    fn timerange_input_rejects_all_none() {
+        let error = CommandTimerange::from_input(TimerangeInput::default())
+            .expect_err("missing timerange should fail");
+
+        assert!(matches!(
+            error,
+            ValidationError::MissingField { field: "timerange" }
+        ));
+    }
+
+    #[test]
+    fn relative_timerange_accepts_hours() {
+        let timerange = RelativeTimerange::new("1h").expect("hours should parse");
+
+        assert_eq!(timerange.api_range().expect("api range should parse"), 3600);
+    }
+
+    #[test]
+    fn relative_timerange_accepts_days() {
+        let timerange = RelativeTimerange::new("1d").expect("days should parse");
+
+        assert_eq!(
+            timerange.api_range().expect("api range should parse"),
+            86400
+        );
+    }
+
+    #[test]
+    fn relative_timerange_accepts_weeks() {
+        let timerange = RelativeTimerange::new("1w").expect("weeks should parse");
+
+        assert_eq!(
+            timerange.api_range().expect("api range should parse"),
+            604800
+        );
+    }
+
+    #[test]
+    fn relative_timerange_rejects_zero() {
+        let error = RelativeTimerange::new("0s").expect_err("zero duration should fail");
+
+        assert!(matches!(error, ValidationError::InvalidTimerange { .. }));
+    }
+
+    #[test]
+    fn normalize_segment_trims_whitespace() {
+        let timerange = RelativeTimerange::new("  15m  ").expect("whitespace should be trimmed");
+
+        assert_eq!(timerange.value(), "15m");
     }
 }

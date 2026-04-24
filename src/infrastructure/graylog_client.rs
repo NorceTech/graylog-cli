@@ -1060,3 +1060,800 @@ fn timerange_to_json(timerange: &CommandTimerange) -> Result<Value, HttpError> {
         })),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ts(value: &str) -> OffsetDateTime {
+        OffsetDateTime::parse(value, &Rfc3339).unwrap()
+    }
+
+    fn formatted(value: OffsetDateTime) -> String {
+        value.format(&Rfc3339).unwrap()
+    }
+
+    fn assert_interval(value: &str, expected: DateHistogramInterval) {
+        let actual = parse_date_histogram_interval(value).unwrap();
+        match (actual, expected) {
+            (DateHistogramInterval::Seconds(actual), DateHistogramInterval::Seconds(expected))
+            | (DateHistogramInterval::Minutes(actual), DateHistogramInterval::Minutes(expected))
+            | (DateHistogramInterval::Hours(actual), DateHistogramInterval::Hours(expected))
+            | (DateHistogramInterval::Days(actual), DateHistogramInterval::Days(expected))
+            | (DateHistogramInterval::Weeks(actual), DateHistogramInterval::Weeks(expected))
+            | (DateHistogramInterval::Months(actual), DateHistogramInterval::Months(expected))
+            | (DateHistogramInterval::Years(actual), DateHistogramInterval::Years(expected)) => {
+                assert_eq!(actual, expected);
+            }
+            (actual, expected) => panic!("expected {expected:?}, got {actual:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_schema_columns_parses_named_columns() {
+        let columns = extract_schema_columns(json!([
+            {"name": "timestamp"},
+            {"name": "message"}
+        ]))
+        .unwrap();
+
+        assert_eq!(columns, vec!["timestamp", "message"]);
+    }
+
+    #[test]
+    fn extract_schema_columns_generates_fallback_for_missing_name() {
+        let columns = extract_schema_columns(json!([
+            {"name": "source"},
+            {}
+        ]))
+        .unwrap();
+
+        assert_eq!(columns, vec!["source", "column_1"]);
+    }
+
+    #[test]
+    fn extract_schema_columns_generates_fallback_for_empty_name() {
+        extract_schema_columns(json!([{ "name": "" }]))
+            .expect_err("empty schema names are rejected by current normalization");
+    }
+
+    #[test]
+    fn extract_schema_columns_rejects_non_array() {
+        extract_schema_columns(json!({"name": "timestamp"})).expect_err("schema must be array");
+    }
+
+    #[test]
+    fn extract_schema_columns_rejects_non_object_column() {
+        extract_schema_columns(json!([42])).expect_err("schema columns must be objects");
+    }
+
+    #[test]
+    fn extract_schema_columns_handles_empty_array() {
+        let columns = extract_schema_columns(json!([])).unwrap();
+
+        assert!(columns.is_empty());
+    }
+
+    #[test]
+    fn normalize_row_maps_columns_to_values() {
+        let columns = vec!["a".to_string(), "b".to_string()];
+        let row = normalize_row(&columns, json!([1, 2])).unwrap();
+
+        assert_eq!(row.get("a"), Some(&json!(1)));
+        assert_eq!(row.get("b"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn normalize_row_strips_field_prefix() {
+        let columns = vec!["field: message".to_string()];
+        let row = normalize_row(&columns, json!(["hello"])).unwrap();
+
+        assert_eq!(row.get("message"), Some(&json!("hello")));
+        assert!(!row.contains_key("field: message"));
+    }
+
+    #[test]
+    fn normalize_row_keeps_key_without_prefix() {
+        let columns = vec!["timestamp".to_string()];
+        let row = normalize_row(&columns, json!(["2026-01-01"])).unwrap();
+
+        assert_eq!(row.get("timestamp"), Some(&json!("2026-01-01")));
+    }
+
+    #[test]
+    fn normalize_row_skips_null_placeholders() {
+        let columns = vec!["source".to_string()];
+        let row = normalize_row(&columns, json!([null])).unwrap();
+
+        assert!(!row.contains_key("source"));
+    }
+
+    #[test]
+    fn normalize_row_skips_dash_placeholders() {
+        let columns = vec!["source".to_string()];
+        let row = normalize_row(&columns, json!(["-"])).unwrap();
+
+        assert!(!row.contains_key("source"));
+    }
+
+    #[test]
+    fn normalize_row_skips_string_null_placeholders() {
+        let columns = vec!["source".to_string()];
+        let row = normalize_row(&columns, json!(["null"])).unwrap();
+
+        assert!(!row.contains_key("source"));
+    }
+
+    #[test]
+    fn normalize_row_keeps_normal_string_values() {
+        let columns = vec!["level".to_string()];
+        let row = normalize_row(&columns, json!(["ERROR"])).unwrap();
+
+        assert_eq!(row.get("level"), Some(&json!("ERROR")));
+    }
+
+    #[test]
+    fn normalize_row_keeps_numeric_values() {
+        let columns = vec!["count".to_string()];
+        let row = normalize_row(&columns, json!([42])).unwrap();
+
+        assert_eq!(row.get("count"), Some(&json!(42)));
+    }
+
+    #[test]
+    fn normalize_row_handles_width_mismatch_more_values() {
+        let columns = vec!["a".to_string()];
+        let row = normalize_row(&columns, json!([1, 2])).unwrap();
+
+        assert_eq!(row.get("a"), Some(&json!(1)));
+        assert_eq!(row.get("column_1"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn normalize_row_handles_width_mismatch_more_columns() {
+        let columns = vec!["a".to_string(), "b".to_string()];
+        let row = normalize_row(&columns, json!([1])).unwrap();
+
+        assert_eq!(row.get("a"), Some(&json!(1)));
+        assert!(!row.contains_key("b"));
+    }
+
+    #[test]
+    fn normalize_row_handles_empty_input() {
+        let row = normalize_row(&[], json!([])).unwrap();
+
+        assert!(row.is_empty());
+    }
+
+    #[test]
+    fn normalize_rows_processes_multiple_rows() {
+        let rows = normalize_rows(
+            json!([{ "name": "a" }, { "name": "b" }]),
+            json!([[1, 2], [3, 4]]),
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get("a"), Some(&json!(1)));
+        assert_eq!(rows[1].get("b"), Some(&json!(4)));
+    }
+
+    #[test]
+    fn normalize_rows_rejects_non_array_datarows() {
+        normalize_rows(json!([]), json!({})).expect_err("datarows must be array");
+    }
+
+    #[test]
+    fn normalize_tabular_response_extracts_schema_datarows_metadata() {
+        let (rows, metadata) = normalize_tabular_response(json!({
+            "schema": [{"name": "timestamp"}, {"name": "message"}],
+            "datarows": [["2026-01-01T00:00:00Z", "hello"]],
+            "metadata": {"total_results": 1}
+        }))
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("timestamp"),
+            Some(&json!("2026-01-01T00:00:00Z"))
+        );
+        assert_eq!(rows[0].get("message"), Some(&json!("hello")));
+        assert_eq!(metadata.get("total_results"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn normalize_tabular_response_handles_missing_metadata() {
+        let (_, metadata) = normalize_tabular_response(json!({
+            "schema": [],
+            "datarows": []
+        }))
+        .unwrap();
+
+        assert!(metadata.is_empty());
+    }
+
+    #[test]
+    fn normalize_tabular_response_includes_extra_keys_in_metadata() {
+        let (_, metadata) = normalize_tabular_response(json!({
+            "schema": [],
+            "datarows": [],
+            "metadata": {"page": 1},
+            "total_results": 2
+        }))
+        .unwrap();
+
+        assert_eq!(metadata.get("page"), Some(&json!(1)));
+        assert_eq!(metadata.get("total_results"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn normalize_tabular_response_rejects_non_object() {
+        normalize_tabular_response(json!([])).expect_err("response must be object");
+    }
+
+    #[test]
+    fn normalize_tabular_response_handles_missing_schema() {
+        let (rows, _) = normalize_tabular_response(json!({
+            "datarows": [["value"]]
+        }))
+        .unwrap();
+
+        assert_eq!(rows[0].get("column_0"), Some(&json!("value")));
+    }
+
+    #[test]
+    fn normalize_tabular_response_handles_missing_datarows() {
+        let (rows, _) = normalize_tabular_response(json!({
+            "schema": [{"name": "source"}]
+        }))
+        .unwrap();
+
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn normalize_tabular_response_rejects_invalid_metadata() {
+        normalize_tabular_response(json!({
+            "schema": [],
+            "datarows": [],
+            "metadata": "oops"
+        }))
+        .expect_err("metadata must be object");
+    }
+
+    #[test]
+    fn strip_field_prefix_removes_field_prefix() {
+        assert_eq!(strip_field_prefix("field: message"), "message");
+    }
+
+    #[test]
+    fn strip_field_prefix_keeps_unprefixed() {
+        assert_eq!(strip_field_prefix("timestamp"), "timestamp");
+    }
+
+    #[test]
+    fn strip_field_prefix_partial_match_not_stripped() {
+        assert_eq!(strip_field_prefix("field:message"), "field:message");
+    }
+
+    #[test]
+    fn is_empty_placeholder_null() {
+        assert!(is_empty_placeholder(&Value::Null));
+    }
+
+    #[test]
+    fn is_empty_placeholder_dash() {
+        assert!(is_empty_placeholder(&json!("-")));
+    }
+
+    #[test]
+    fn is_empty_placeholder_string_null() {
+        assert!(is_empty_placeholder(&json!("null")));
+    }
+
+    #[test]
+    fn is_empty_placeholder_non_empty_string() {
+        assert!(!is_empty_placeholder(&json!("hello")));
+    }
+
+    #[test]
+    fn is_empty_placeholder_number() {
+        assert!(!is_empty_placeholder(&json!(42)));
+    }
+
+    #[test]
+    fn is_empty_placeholder_empty_string() {
+        assert!(!is_empty_placeholder(&json!("")));
+    }
+
+    #[test]
+    fn is_empty_placeholder_boolean() {
+        assert!(!is_empty_placeholder(&json!(true)));
+    }
+
+    #[test]
+    fn parse_interval_singular_names() {
+        assert_interval("second", DateHistogramInterval::Seconds(1));
+        assert_interval("minute", DateHistogramInterval::Minutes(1));
+        assert_interval("hour", DateHistogramInterval::Hours(1));
+        assert_interval("day", DateHistogramInterval::Days(1));
+        assert_interval("week", DateHistogramInterval::Weeks(1));
+        assert_interval("month", DateHistogramInterval::Months(1));
+        assert_interval("year", DateHistogramInterval::Years(1));
+    }
+
+    #[test]
+    fn parse_interval_plural_names() {
+        assert_interval("seconds", DateHistogramInterval::Seconds(1));
+        assert_interval("minutes", DateHistogramInterval::Minutes(1));
+        assert_interval("hours", DateHistogramInterval::Hours(1));
+        assert_interval("days", DateHistogramInterval::Days(1));
+        assert_interval("weeks", DateHistogramInterval::Weeks(1));
+        assert_interval("months", DateHistogramInterval::Months(1));
+        assert_interval("years", DateHistogramInterval::Years(1));
+    }
+
+    #[test]
+    fn parse_interval_quarter() {
+        assert_interval("quarter", DateHistogramInterval::Months(3));
+        assert_interval("quarters", DateHistogramInterval::Months(3));
+    }
+
+    #[test]
+    fn parse_interval_numeric_with_unit() {
+        assert_interval("5m", DateHistogramInterval::Minutes(5));
+        assert_interval("2h", DateHistogramInterval::Hours(2));
+        assert_interval("3d", DateHistogramInterval::Days(3));
+        assert_interval("1w", DateHistogramInterval::Weeks(1));
+        assert_interval("6M", DateHistogramInterval::Months(6));
+        assert_interval("2y", DateHistogramInterval::Years(2));
+        assert_interval("30s", DateHistogramInterval::Seconds(30));
+    }
+
+    #[test]
+    fn parse_interval_case_insensitive() {
+        assert_interval("HOUR", DateHistogramInterval::Hours(1));
+        assert_interval("Minute", DateHistogramInterval::Minutes(1));
+    }
+
+    #[test]
+    fn parse_interval_rejects_empty() {
+        parse_date_histogram_interval("").expect_err("empty interval is invalid");
+    }
+
+    #[test]
+    fn parse_interval_rejects_zero() {
+        parse_date_histogram_interval("0m").expect_err("zero interval is invalid");
+    }
+
+    #[test]
+    fn parse_interval_rejects_unknown() {
+        parse_date_histogram_interval("foo").expect_err("unknown interval is invalid");
+    }
+
+    #[test]
+    fn parse_interval_rejects_single_char() {
+        parse_date_histogram_interval("x").expect_err("single char interval is invalid");
+    }
+
+    #[test]
+    fn floor_second_to_5() {
+        let bucket = floor_to_second_boundary(ts("2026-01-15T14:30:17Z"), 5).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T14:30:15Z");
+    }
+
+    #[test]
+    fn floor_second_to_1() {
+        let bucket = floor_to_second_boundary(ts("2026-01-15T14:30:37Z"), 1).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T14:30:37Z");
+    }
+
+    #[test]
+    fn floor_second_to_30() {
+        let bucket = floor_to_second_boundary(ts("2026-01-15T14:30:45Z"), 30).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T14:30:30Z");
+    }
+
+    #[test]
+    fn floor_second_preserves_date_and_other_time_components() {
+        let bucket = floor_to_second_boundary(ts("2026-01-15T14:30:45Z"), 10).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T14:30:40Z");
+    }
+
+    #[test]
+    fn floor_minute_to_15() {
+        let bucket = floor_to_minute_boundary(ts("2026-01-15T14:37:45Z"), 15).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T14:30:00Z");
+    }
+
+    #[test]
+    fn floor_minute_to_1() {
+        let bucket = floor_to_minute_boundary(ts("2026-01-15T14:23:45Z"), 1).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T14:23:00Z");
+    }
+
+    #[test]
+    fn floor_minute_to_30() {
+        let bucket = floor_to_minute_boundary(ts("2026-01-15T14:45:45Z"), 30).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T14:30:00Z");
+    }
+
+    #[test]
+    fn floor_minute_wraps_hour_correctly() {
+        let bucket = floor_to_minute_boundary(ts("2026-01-15T02:17:45Z"), 90).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T01:30:00Z");
+    }
+
+    #[test]
+    fn floor_hour_to_6() {
+        let bucket = floor_to_hour_boundary(ts("2026-01-15T14:30:45Z"), 6).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T12:00:00Z");
+    }
+
+    #[test]
+    fn floor_hour_to_1() {
+        let bucket = floor_to_hour_boundary(ts("2026-01-15T14:30:45Z"), 1).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T14:00:00Z");
+    }
+
+    #[test]
+    fn floor_hour_to_3() {
+        let bucket = floor_to_hour_boundary(ts("2026-01-15T17:30:45Z"), 3).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T15:00:00Z");
+    }
+
+    #[test]
+    fn floor_day_size_1() {
+        let bucket = floor_to_day_boundary(ts("2026-01-15T14:30:45Z"), 1).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-15T00:00:00Z");
+    }
+
+    #[test]
+    fn floor_day_size_7() {
+        let input = ts("2026-01-15T14:30:45Z");
+        let bucket = floor_to_day_boundary(input, 7).unwrap();
+        let expected_julian = (input.date().to_julian_day() / 7) * 7;
+        let expected = time::Date::from_julian_day(expected_julian).unwrap();
+
+        assert_eq!(bucket.date(), expected);
+        assert_eq!(bucket.time(), Time::MIDNIGHT);
+    }
+
+    #[test]
+    fn floor_week_size_1() {
+        let bucket = floor_to_week_boundary(ts("2026-01-15T14:30:45Z"), 1).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-12T00:00:00Z");
+    }
+
+    #[test]
+    fn floor_week_size_2() {
+        let bucket = floor_to_week_boundary(ts("2026-01-15T14:30:45Z"), 2).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-05T00:00:00Z");
+    }
+
+    #[test]
+    fn floor_month_size_1() {
+        let bucket = floor_to_month_boundary(ts("2026-08-15T14:30:45Z"), 1).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-08-01T00:00:00Z");
+    }
+
+    #[test]
+    fn floor_month_size_3() {
+        let bucket = floor_to_month_boundary(ts("2026-04-15T14:30:45Z"), 3).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-04-01T00:00:00Z");
+    }
+
+    #[test]
+    fn floor_month_size_6() {
+        let bucket = floor_to_month_boundary(ts("2026-08-15T14:30:45Z"), 6).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-07-01T00:00:00Z");
+    }
+
+    #[test]
+    fn floor_year_size_1() {
+        let bucket = floor_to_year_boundary(ts("2026-08-15T14:30:45Z"), 1).unwrap();
+
+        assert_eq!(formatted(bucket), "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn floor_year_size_5() {
+        let bucket = floor_to_year_boundary(ts("2026-08-15T14:30:45Z"), 5).unwrap();
+
+        assert_eq!(formatted(bucket), "2025-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn bucket_timestamp_value_hours() {
+        let bucket = bucket_timestamp_value(
+            &json!("2026-01-15T14:30:00Z"),
+            DateHistogramInterval::Hours(1),
+        )
+        .unwrap();
+
+        assert_eq!(bucket, "2026-01-15T14:00:00Z");
+    }
+
+    #[test]
+    fn bucket_timestamp_value_days() {
+        let bucket = bucket_timestamp_value(
+            &json!("2026-01-15T14:30:00Z"),
+            DateHistogramInterval::Days(1),
+        )
+        .unwrap();
+
+        assert_eq!(bucket, "2026-01-15T00:00:00Z");
+    }
+
+    #[test]
+    fn bucket_timestamp_value_rejects_non_string() {
+        bucket_timestamp_value(&json!(42), DateHistogramInterval::Hours(1))
+            .expect_err("timestamp must be string");
+    }
+
+    #[test]
+    fn bucket_timestamp_value_rejects_invalid_timestamp() {
+        bucket_timestamp_value(&json!("not-a-timestamp"), DateHistogramInterval::Hours(1))
+            .expect_err("timestamp must be RFC3339");
+    }
+
+    #[test]
+    fn normalize_date_histogram_buckets_rows() {
+        let (rows, metadata) = normalize_date_histogram_response(
+            json!({
+                "schema": [
+                    {"name": "timestamp"},
+                    {"name": "count"}
+                ],
+                "datarows": [
+                    ["2026-01-15T14:10:00Z", 3],
+                    ["2026-01-15T14:50:00Z", 2],
+                    ["2026-01-15T15:10:00Z", 4]
+                ],
+                "metadata": {"total": 3}
+            }),
+            &Some("hour".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(metadata.get("total"), Some(&json!(3)));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].get("timestamp"),
+            Some(&json!("2026-01-15T14:00:00Z"))
+        );
+        assert_eq!(rows[0].get("count"), Some(&json!(5)));
+        assert_eq!(
+            rows[1].get("timestamp"),
+            Some(&json!("2026-01-15T15:00:00Z"))
+        );
+        assert_eq!(rows[1].get("count"), Some(&json!(4)));
+    }
+
+    #[test]
+    fn normalize_date_histogram_rejects_missing_interval() {
+        normalize_date_histogram_response(json!({}), &None).expect_err("interval is required");
+    }
+
+    #[test]
+    fn normalize_date_histogram_rejects_non_object() {
+        normalize_date_histogram_response(json!([]), &Some("hour".to_string()))
+            .expect_err("response must be object");
+    }
+
+    #[test]
+    fn normalize_date_histogram_rejects_too_few_columns() {
+        normalize_date_histogram_response(
+            json!({
+                "schema": [{"name": "timestamp"}],
+                "datarows": []
+            }),
+            &Some("hour".to_string()),
+        )
+        .expect_err("timestamp and count columns are required");
+    }
+
+    #[test]
+    fn normalize_cardinality_sums_numeric_metrics() {
+        let (rows, metadata) = normalize_cardinality_response(
+            json!({
+                "schema": [{"name": "metric: card(user)"}],
+                "datarows": [[3], [2]],
+                "metadata": {"source": "fallback"}
+            }),
+            "user",
+        )
+        .unwrap();
+
+        assert_eq!(metadata.get("source"), Some(&json!("fallback")));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("metric: card(user)"), Some(&json!(5)));
+    }
+
+    #[test]
+    fn normalize_cardinality_rejects_non_numeric_metric() {
+        normalize_cardinality_response(
+            json!({
+                "schema": [{"name": "metric: card(user)"}],
+                "datarows": [["oops"]]
+            }),
+            "user",
+        )
+        .expect_err("cardinality metric must be numeric");
+    }
+
+    #[test]
+    fn normalize_fields_extracts_field_names() {
+        let fields = normalize_fields_response(json!({"fields": ["source", "message"]})).unwrap();
+
+        assert_eq!(fields, vec!["source", "message"]);
+    }
+
+    #[test]
+    fn normalize_fields_filters_empty_strings() {
+        normalize_fields_response(json!({"fields": ["source", "", "message"]}))
+            .expect_err("empty field names are rejected");
+    }
+
+    #[test]
+    fn normalize_fields_rejects_non_strings() {
+        normalize_fields_response(json!({"fields": [42]}))
+            .expect_err("field names must be strings");
+    }
+
+    #[test]
+    fn normalize_fields_rejects_missing_key() {
+        normalize_fields_response(json!({})).expect_err("fields key is required");
+    }
+
+    #[test]
+    fn normalize_fields_rejects_non_array() {
+        normalize_fields_response(json!({"fields": "oops"})).expect_err("fields must be array");
+    }
+
+    #[test]
+    fn normalize_stream_extracts_stream_key() {
+        let stream = normalize_stream_response(json!({"stream": {"id": "abc"}})).unwrap();
+
+        assert_eq!(stream.get("id"), Some(&json!("abc")));
+    }
+
+    #[test]
+    fn normalize_stream_falls_back_to_object() {
+        let stream = normalize_stream_response(json!({"id": "abc"})).unwrap();
+
+        assert_eq!(stream.get("id"), Some(&json!("abc")));
+    }
+
+    #[test]
+    fn normalize_stream_rejects_non_object_stream() {
+        normalize_stream_response(json!({"stream": 42})).expect_err("stream must be object");
+    }
+
+    #[test]
+    fn sanitize_trims_whitespace() {
+        assert_eq!(
+            sanitize_server_message(Some("  hello  ")),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_collapses_multiline() {
+        assert_eq!(
+            sanitize_server_message(Some("line1\nline2")),
+            Some("line1 line2".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_truncates_at_200_chars() {
+        let message = "a".repeat(300);
+        let sanitized = sanitize_server_message(Some(&message)).unwrap();
+
+        assert_eq!(sanitized.len(), 200);
+        assert!(sanitized.chars().all(|value| value == 'a'));
+    }
+
+    #[test]
+    fn sanitize_returns_none_for_empty() {
+        assert_eq!(sanitize_server_message(Some("")), None);
+    }
+
+    #[test]
+    fn sanitize_returns_none_for_none_input() {
+        assert_eq!(sanitize_server_message(None), None);
+    }
+
+    #[test]
+    fn status_message_auth_error() {
+        assert_eq!(
+            status_message("/api/system", 401, None),
+            "Graylog rejected the supplied credentials"
+        );
+    }
+
+    #[test]
+    fn status_message_not_found() {
+        assert_eq!(
+            status_message("/api/missing", 404, None),
+            "Graylog endpoint `/api/missing` is unavailable"
+        );
+    }
+
+    #[test]
+    fn status_message_method_not_allowed() {
+        assert_eq!(
+            status_message("/api/system", 405, None),
+            "Graylog endpoint `/api/system` is not supported"
+        );
+    }
+
+    #[test]
+    fn status_message_generic_with_body() {
+        assert_eq!(
+            status_message("/api/system", 500, Some("boom")),
+            "Graylog returned HTTP 500: boom"
+        );
+    }
+
+    #[test]
+    fn status_message_generic_without_body() {
+        assert_eq!(
+            status_message("/api/system", 500, None),
+            "Graylog returned HTTP 500"
+        );
+    }
+
+    #[test]
+    fn extract_count_u64() {
+        assert_eq!(extract_count_value(&json!(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn extract_count_i64() {
+        assert_eq!(extract_count_value(&json!(-1)).unwrap(), u64::MAX);
+    }
+
+    #[test]
+    fn extract_count_rejects_non_number() {
+        extract_count_value(&json!("foo")).expect_err("count must be numeric");
+    }
+
+    #[test]
+    fn extract_count_rejects_float() {
+        extract_count_value(&json!(3.5)).expect_err("count must be integer");
+    }
+
+    #[test]
+    fn validate_non_empty_returns_trimmed() {
+        assert_eq!(validate_non_empty("field", "  hello  ").unwrap(), "hello");
+    }
+
+    #[test]
+    fn validate_non_empty_rejects_empty() {
+        validate_non_empty("field", "").expect_err("empty value is invalid");
+    }
+
+    #[test]
+    fn validate_non_empty_rejects_whitespace() {
+        validate_non_empty("field", "   ").expect_err("whitespace value is invalid");
+    }
+}

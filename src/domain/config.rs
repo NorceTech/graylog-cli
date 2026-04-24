@@ -74,3 +74,120 @@ where
     let s = String::deserialize(deserializer)?;
     Ok(SecretString::new(s.into()))
 }
+
+#[cfg(test)]
+mod tests {
+    use secrecy::{ExposeSecret, SecretString};
+    use url::Url;
+
+    use super::{Config, DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, GraylogConfig};
+
+    fn test_config() -> Config {
+        Config {
+            graylog: GraylogConfig {
+                url: Url::parse("https://graylog.example.com").expect("test URL should parse"),
+                token: SecretString::new("test-token".to_owned().into()),
+                timeout_seconds: 42,
+                verify_tls: false,
+                fields_cache_ttl_seconds: 123,
+            },
+        }
+    }
+
+    #[test]
+    fn config_serializes_to_toml() {
+        let toml = toml::to_string(&test_config()).expect("config should serialize");
+
+        assert!(toml.contains("url = \"https://graylog.example.com/\""));
+        assert!(toml.contains("token = \"test-token\""));
+    }
+
+    #[test]
+    fn config_round_trips_through_toml() {
+        let config = test_config();
+        let toml = toml::to_string(&config).expect("config should serialize");
+
+        let deserialized: Config = toml::from_str(&toml).expect("config should deserialize");
+
+        assert_eq!(deserialized.graylog.url, config.graylog.url);
+        assert_eq!(
+            deserialized.graylog.timeout_seconds,
+            config.graylog.timeout_seconds
+        );
+    }
+
+    #[test]
+    fn graylog_config_new_sets_defaults() {
+        let config = GraylogConfig::new(
+            Url::parse("https://graylog.example.com").expect("test URL should parse"),
+            SecretString::new("test-token".to_owned().into()),
+        );
+
+        assert_eq!(config.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
+        assert!(config.verify_tls);
+        assert_eq!(
+            config.fields_cache_ttl_seconds,
+            DEFAULT_FIELDS_CACHE_TTL_SECONDS
+        );
+    }
+
+    #[test]
+    fn graylog_config_clone_preserves_token() {
+        let config = GraylogConfig::new(
+            Url::parse("https://graylog.example.com").expect("test URL should parse"),
+            SecretString::new("test-token".to_owned().into()),
+        );
+
+        let cloned = config.clone();
+
+        assert_eq!(cloned.token.expose_secret(), "test-token");
+    }
+
+    #[test]
+    fn config_deserialization_uses_default_timeout() {
+        let toml = r#"
+            [graylog]
+            url = "https://graylog.example.com"
+            token = "test-token"
+            verify_tls = false
+            fields_cache_ttl_seconds = 123
+        "#;
+
+        let config: Config = toml::from_str(toml).expect("config should deserialize");
+
+        assert_eq!(config.graylog.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
+    }
+
+    #[test]
+    fn config_deserialization_uses_default_verify_tls() {
+        let toml = r#"
+            [graylog]
+            url = "https://graylog.example.com"
+            token = "test-token"
+            timeout_seconds = 42
+            fields_cache_ttl_seconds = 123
+        "#;
+
+        let config: Config = toml::from_str(toml).expect("config should deserialize");
+
+        assert!(config.graylog.verify_tls);
+    }
+
+    #[test]
+    fn config_deserialization_uses_default_cache_ttl() {
+        let toml = r#"
+            [graylog]
+            url = "https://graylog.example.com"
+            token = "test-token"
+            timeout_seconds = 42
+            verify_tls = false
+        "#;
+
+        let config: Config = toml::from_str(toml).expect("config should deserialize");
+
+        assert_eq!(
+            config.graylog.fields_cache_ttl_seconds,
+            DEFAULT_FIELDS_CACHE_TTL_SECONDS
+        );
+    }
+}
