@@ -105,6 +105,16 @@ jobs:
         with:
           path: dist
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          sha256sum \
+            graylog-cli-linux-x86_64/graylog-cli-linux-x86_64 \
+            graylog-cli-macos-aarch64/graylog-cli-macos-aarch64 \
+            graylog-cli-windows-x86_64.exe/graylog-cli-windows-x86_64.exe \
+            > checksums-sha256.txt
+          cat checksums-sha256.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -113,3 +123,4 @@ jobs:
             dist/graylog-cli-linux-x86_64/graylog-cli-linux-x86_64
             dist/graylog-cli-macos-aarch64/graylog-cli-macos-aarch64
             dist/graylog-cli-windows-x86_64.exe/graylog-cli-windows-x86_64.exe
+            dist/checksums-sha256.txt
