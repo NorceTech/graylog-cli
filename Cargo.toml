@@ -2,7 +2,6 @@
 name = "graylog-cli"
 version = "0.0.3-alpha"
 edition = "2024"
-rust-version = "1.85"
 publish = false
 
 [dependencies]
@@ -11,7 +10,10 @@ clap = { version = "4.6", features = ["derive"] }
 dirs = "6"
 exn = "0.3"
 humantime = "2"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "json",
+  "rustls",
+] }
 secrecy = { version = "0.10", features = ["serde"] }
 self-replace = "1"
 semver = "1"
