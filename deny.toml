@@ -25,3 +25,7 @@ confidence-threshold = 0.9
 # ships as a binary via GitHub Releases, not to crates.io, so it has no
 # project license and cargo-deny should skip license checks for it.
 ignore = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

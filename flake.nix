@@ -36,7 +36,7 @@
         }:
         let
           pname = "graylog-cli";
-          version = "0.0.3-alpha";
+          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
           commonArgs = {
             inherit pname version;
             src = self;
@@ -98,8 +98,7 @@
                 cargo-edit
                 cargo-watch
                 cargo-wizard
-                openssl
-                pkg-config
+                cargo-nextest
                 rust-analyzer
               ]
               ++ config.pre-commit.settings.enabledPackages;
@@ -114,7 +113,6 @@
           };
         };
       flake.overlays.default = final: prev: {
-        nodejs = final.nodejs_24;
         rustToolchain =
           with inputs.fenix.packages.${prev.stdenv.hostPlatform.system};
           combine (

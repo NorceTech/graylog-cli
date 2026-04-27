@@ -4,3 +4,7 @@
 .sisyphus/
 result
 .idea/
+**/*.rs.bk
+coverage/
+*.profraw
+.env
