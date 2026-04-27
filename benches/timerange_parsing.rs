@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use graylog_cli::domain::timerange::{CommandTimerange, TimerangeInput};
 
 fn bench_relative_timerange(c: &mut Criterion) {

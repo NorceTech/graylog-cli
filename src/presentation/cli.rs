@@ -369,7 +369,10 @@ mod tests {
     #[test]
     fn auth_requires_url_and_token() {
         let result = parse(&["graylog-cli", "auth"]);
-        assert!(result.is_err(), "auth without --url and --token should fail");
+        assert!(
+            result.is_err(),
+            "auth without --url and --token should fail"
+        );
     }
 
     #[test]
@@ -403,8 +406,8 @@ mod tests {
 
     #[test]
     fn search_succeeds_with_query() {
-        let cli =
-            parse(&["graylog-cli", "search", "level:ERROR"]).expect("search with query should parse");
+        let cli = parse(&["graylog-cli", "search", "level:ERROR"])
+            .expect("search with query should parse");
 
         match cli.command {
             Commands::Search(args) => {
@@ -545,8 +548,7 @@ mod tests {
 
     #[test]
     fn streams_list_parses() {
-        let cli =
-            parse(&["graylog-cli", "streams", "list"]).expect("streams list should parse");
+        let cli = parse(&["graylog-cli", "streams", "list"]).expect("streams list should parse");
 
         match cli.command {
             Commands::Streams { command } => {
@@ -626,7 +628,15 @@ mod tests {
 
     #[test]
     fn streams_search_rejects_limit_zero() {
-        let result = parse(&["graylog-cli", "streams", "search", "abc", "test", "--limit", "0"]);
+        let result = parse(&[
+            "graylog-cli",
+            "streams",
+            "search",
+            "abc",
+            "test",
+            "--limit",
+            "0",
+        ]);
         assert!(
             result.is_err(),
             "streams search --limit 0 should be rejected by clap value parser"
@@ -654,14 +664,8 @@ mod tests {
 
     #[test]
     fn sort_direction_accepts_asc_and_desc() {
-        let cli_asc = parse(&[
-            "graylog-cli",
-            "search",
-            "test",
-            "--sort-direction",
-            "asc",
-        ])
-        .expect("asc should be accepted");
+        let cli_asc = parse(&["graylog-cli", "search", "test", "--sort-direction", "asc"])
+            .expect("asc should be accepted");
 
         match cli_asc.command {
             Commands::Search(args) => {
@@ -670,14 +674,8 @@ mod tests {
             _ => panic!("expected Search command"),
         }
 
-        let cli_desc = parse(&[
-            "graylog-cli",
-            "search",
-            "test",
-            "--sort-direction",
-            "desc",
-        ])
-        .expect("desc should be accepted");
+        let cli_desc = parse(&["graylog-cli", "search", "test", "--sort-direction", "desc"])
+            .expect("desc should be accepted");
 
         match cli_desc.command {
             Commands::Search(args) => {
@@ -696,9 +694,6 @@ mod tests {
             "--sort-direction",
             "invalid",
         ]);
-        assert!(
-            result.is_err(),
-            "invalid sort-direction should be rejected"
-        );
+        assert!(result.is_err(), "invalid sort-direction should be rejected");
     }
 }
