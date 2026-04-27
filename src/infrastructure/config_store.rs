@@ -103,7 +103,16 @@ impl CacheStore for FileConfigStore {
             std::fs::create_dir_all(parent)
                 .map_err(|error| CacheError::OperationFailure(error.to_string()))?;
             std::fs::write(&cache_path, data)
-                .map_err(|error| CacheError::OperationFailure(error.to_string()))
+                .map_err(|error| CacheError::OperationFailure(error.to_string()))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ =
+                    std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o600));
+            }
+
+            Ok::<(), CacheError>(())
         })
         .await
         .map_err(|error| CacheError::StoreUnavailable(format!("failed to write cache: {error}")))?
