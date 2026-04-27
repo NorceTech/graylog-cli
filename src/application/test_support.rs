@@ -1,5 +1,5 @@
 #[cfg(test)]
-pub(crate) mod test_support {
+pub(crate) mod fakes {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 

@@ -345,7 +345,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::application::ports::updater::ReleaseInfo;
-    use crate::application::test_support::test_support::FakeCacheStore;
+    use crate::application::test_support::fakes::FakeCacheStore;
 
     struct FakeUpdater {
         release: Mutex<ReleaseInfo>,

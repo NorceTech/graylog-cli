@@ -617,7 +617,7 @@ mod tests {
     use serde_json::{Map, Value};
 
     use crate::application::ports::config_store::ConfigError;
-    use crate::application::test_support::test_support::FakeCacheStore;
+    use crate::application::test_support::fakes::FakeCacheStore;
     use crate::domain::config::{
         DEFAULT_FIELDS_CACHE_TTL_SECONDS, DEFAULT_TIMEOUT_SECONDS, UpdaterConfig,
     };
