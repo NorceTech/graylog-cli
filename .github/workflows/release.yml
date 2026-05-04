@@ -35,7 +35,8 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v16
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - name: Update fenix lock
+        run: nix flake lock --update-input fenix
 
       - name: Build Linux binary
         run: nix build
@@ -57,7 +58,8 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v16
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - name: Update fenix lock
+        run: nix flake lock --update-input fenix
 
       - name: Build macOS binary
         run: nix build
@@ -79,7 +81,8 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v16
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - name: Update fenix lock
+        run: nix flake lock --update-input fenix
 
       - name: Build Windows binary
         run: nix build .#graylog-cli-windows

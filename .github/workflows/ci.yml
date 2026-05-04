@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - run: nix flake lock --update-input fenix
       - run: nix flake check --print-build-logs
 
   clippy:
@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - run: nix flake lock --update-input fenix
       - run: nix develop --command cargo clippy --all-targets --locked -- -D warnings
 
   test:
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - run: nix flake lock --update-input fenix
       - run: nix develop --command cargo test --all --locked
 
   deny:
@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - run: nix flake lock --update-input fenix
       - run: nix develop --command cargo deny --all-features check
 
   build-linux:
@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - run: nix flake lock --update-input fenix
       - run: nix build --print-build-logs
 
   build-macos:
@@ -65,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - run: nix flake lock --update-input fenix
       - run: nix build --print-build-logs
 
   build-windows:
@@ -75,5 +75,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - run: nix flake lock --update-input fenix
       - run: nix build .#graylog-cli-windows --print-build-logs
