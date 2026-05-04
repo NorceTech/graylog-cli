@@ -1,3 +1,6 @@
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+
 use crate::domain::error::ValidationError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +68,16 @@ impl AbsoluteTimerange {
         if from == to {
             return Err(ValidationError::InvalidTimerange {
                 message: "`from` and `to` must not be identical".to_string(),
+            });
+        }
+
+        if let (Ok(from_dt), Ok(to_dt)) = (
+            OffsetDateTime::parse(&from, &Rfc3339),
+            OffsetDateTime::parse(&to, &Rfc3339),
+        ) && from_dt > to_dt
+        {
+            return Err(ValidationError::InvalidTimerange {
+                message: "`from` must be earlier than `to`".to_string(),
             });
         }
 
@@ -169,6 +182,19 @@ mod tests {
             .expect_err("identical absolute bounds should fail");
 
         assert!(matches!(error, ValidationError::InvalidTimerange { .. }));
+    }
+
+    #[test]
+    fn absolute_timerange_rejects_reversed_from_to() {
+        let error = AbsoluteTimerange::new("2026-01-01T01:00:00Z", "2026-01-01T00:00:00Z")
+            .expect_err("reversed absolute bounds should fail");
+
+        assert!(matches!(error, ValidationError::InvalidTimerange { .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("`from` must be earlier than `to`")
+        );
     }
 
     #[test]

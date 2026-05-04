@@ -284,18 +284,64 @@ impl ApplicationService {
         })
     }
 
-    pub async fn fields(&self) -> exn::Result<FieldsStatus, CliError> {
-        let client = self.graylog_gateway().await?;
-        let result = client.list_fields().await.or_raise(|| {
-            CliError::Http(HttpError::Unavailable {
-                message: "failed to list fields".to_string(),
-            })
-        })?;
+    pub async fn fields(&self, refresh: bool) -> exn::Result<FieldsStatus, CliError> {
+        let config = self.require_config().await?;
+        let cache_key = "fields".to_string();
+        let ttl = config.graylog.fields_cache_ttl_seconds;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let fetched_fields = if !refresh {
+            if let Some(cached) = self
+                .fields_cache_store
+                .get_serialized(&cache_key)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| serde_json::from_str::<CachedFields>(&s).ok())
+            {
+                if now.saturating_sub(cached.fetched_at) < ttl {
+                    Some(cached.fields)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let fields = match fetched_fields {
+            Some(fields) => fields,
+            None => {
+                let client = self.graylog_gateway_with_config(config.graylog)?;
+                let result = client.list_fields().await.or_raise(|| {
+                    CliError::Http(HttpError::Unavailable {
+                        message: "failed to list fields".to_string(),
+                    })
+                })?;
+                let cache_data = CachedFields {
+                    fields: result.fields.clone(),
+                    fetched_at: now,
+                };
+                if let Ok(serialized) = serde_json::to_string(&cache_data) {
+                    let _ = self
+                        .fields_cache_store
+                        .save_serialized(cache_key, serialized)
+                        .await;
+                }
+                result.fields
+            }
+        };
+
         Ok(FieldsStatus {
             ok: true,
             command: "fields",
-            fields: result.fields.clone(),
-            total: result.fields.len(),
+            total: fields.len(),
+            fields,
         })
     }
 
@@ -408,6 +454,7 @@ impl ApplicationService {
         let mut all_messages = Vec::new();
         let mut metadata = serde_json::Map::new();
         let mut total_results = None;
+        let mut truncated = false;
 
         request.limit = 500;
         request.offset = 0;
@@ -431,6 +478,10 @@ impl ApplicationService {
             all_messages.extend(result.messages);
 
             if all_messages.len() >= MAX_ALL_PAGES_MESSAGES {
+                truncated = true;
+                eprintln!(
+                    "warning: --all-pages reached the {MAX_ALL_PAGES_MESSAGES}-message limit; results are truncated"
+                );
                 break;
             }
 
@@ -456,6 +507,9 @@ impl ApplicationService {
 
         if let Some(total_results) = total_results {
             metadata.insert("total_results".to_string(), json!(total_results));
+        }
+        if truncated {
+            metadata.insert("truncated".to_string(), json!(true));
         }
 
         Ok(MessageSearchStatus {
@@ -1894,7 +1948,7 @@ mod tests {
             FakeCacheStore::default(),
             gateway,
         );
-        let status = service.fields().await.expect("fields should succeed");
+        let status = service.fields(false).await.expect("fields should succeed");
         assert!(status.ok);
         assert_eq!(status.fields, vec!["message", "source", "level"]);
         assert_eq!(status.total, 3);

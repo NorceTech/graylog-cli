@@ -1,6 +1,9 @@
 use std::io::{self, Write};
 
 use serde::Serialize;
+use serde_json::Value;
+use tabled::builder::Builder;
+use tabled::settings::Style;
 
 use crate::domain::error::{CliError, HttpError};
 
@@ -51,6 +54,50 @@ where
     let mut handle = stderr.lock();
     serde_json::to_writer_pretty(&mut handle, value)?;
     handle.write_all(b"\n")
+}
+
+/// Render a slice of JSON objects as an ASCII table to stdout.
+///
+/// Columns are the union of all keys across all rows, in insertion order of
+/// the first row that introduces each key.  String values are unquoted;
+/// nulls and missing fields are shown as `-`.
+pub fn print_table(rows: &[serde_json::Map<String, Value>]) -> io::Result<()> {
+    if rows.is_empty() {
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        writeln!(handle, "(no rows)")?;
+        return Ok(());
+    }
+
+    // Collect ordered, deduplicated column names.
+    let mut columns: Vec<String> = Vec::new();
+    for row in rows {
+        for key in row.keys() {
+            if !columns.contains(key) {
+                columns.push(key.clone());
+            }
+        }
+    }
+
+    let cell_value = |row: &serde_json::Map<String, Value>, col: &str| -> String {
+        match row.get(col) {
+            None | Some(Value::Null) => "-".to_string(),
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => v.to_string(),
+        }
+    };
+
+    let mut builder = Builder::default();
+    builder.push_record(columns.iter().map(|c| c.as_str()));
+    for row in rows {
+        builder.push_record(columns.iter().map(|col| cell_value(row, col)));
+    }
+
+    let table = builder.build().with(Style::ascii()).to_string();
+
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    writeln!(handle, "{table}")
 }
 
 pub fn exit_code_for_cli_error(error: &CliError) -> i32 {

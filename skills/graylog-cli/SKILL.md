@@ -93,28 +93,30 @@ Graylog stores `level` as a **numeric** field (0–7):
 Search Graylog messages with optional grouping and automatic pagination.
 
 ```bash
-graylog-cli search <QUERY> [--time-range 15m] [--field message] [--field source] \
+graylog-cli search <QUERY> [--time-range 15m] [--since 1h] [--field message] [--field source] \
   [--limit 50] [--offset 0] [--sort timestamp] [--sort-direction desc] [--stream-id <ID>] \
-  [--group-by <FIELD>] [--all-pages] [--all-fields]
+  [--group-by <FIELD>] [--all-pages] [--all-fields] [--format json|table]
 ```
 
-| Flag               | Values                       | Notes                                                              |
-| ------------------ | ---------------------------- | ------------------------------------------------------------------ |
-| `--time-range`     | `Ns`, `Nm`, `Nh`, `Nd`, `Nw` | Relative range. Mutually exclusive with `--from`/`--to`            |
-| `--from` / `--to`  | ISO 8601 timestamps          | Absolute range. Both required together                             |
-| `--field`          | repeatable                   | Restrict returned fields                                           |
-| `--all-fields`     | flag (no value)              | Fetch all indexed fields (cached on disk with TTL). Ignored when `--field` is set |
-| `--limit`          | 1-1000                       | Per-page limit (ignored when `--all-pages` is set)                 |
-| `--offset`         | non-negative integer         | Pagination offset (ignored when `--all-pages` is set)              |
-| `--sort`           | field name                   | Default: `timestamp`                                               |
-| `--sort-direction` | `asc`, `desc`                | Default: `desc`                                                    |
-| `--stream-id`      | repeatable                   | Scope search to specific streams                                   |
-| `--group-by`       | any indexed field name       | Group results by a field. Adds `grouped_by` and `groups` to output |
-| `--all-pages`      | flag (no value)              | Fetch all results beyond the 500-per-page API limit                |
+| Flag               | Values                        | Notes                                                                                                                                                   |
+| ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--time-range`     | `Ns`, `Nm`, `Nh`, `Nd`, `Nw`  | Relative range. Mutually exclusive with `--from`/`--to` and `--since`                                                                                  |
+| `--from` / `--to`  | ISO 8601 timestamps           | Absolute range. Both required together. `--from` must be earlier than `--to`                                                                            |
+| `--since`          | humantime duration            | Shorthand absolute range ending now: `--since 1h` expands to `--from <now-1h> --to <now>`. Mutually exclusive with `--time-range` and `--from`/`--to`  |
+| `--field`          | repeatable                    | Restrict returned fields                                                                                                                                |
+| `--all-fields`     | flag (no value)               | Fetch all indexed fields (cached on disk with TTL). Ignored when `--field` is set                                                                      |
+| `--limit`          | 1-1000                        | Per-page limit (ignored when `--all-pages` is set)                                                                                                     |
+| `--offset`         | non-negative integer          | Pagination offset (ignored when `--all-pages` is set)                                                                                                  |
+| `--sort`           | field name                    | Default: `timestamp`                                                                                                                                    |
+| `--sort-direction` | `asc`, `desc`                 | Default: `desc`                                                                                                                                         |
+| `--stream-id`      | repeatable                    | Scope search to specific streams                                                                                                                        |
+| `--group-by`       | any indexed field name        | Group results by a field. Adds `grouped_by` and `groups` to output                                                                                     |
+| `--all-pages`      | flag (no value)               | Fetch all results beyond the 500-per-page API limit. See caveat below                                                                                  |
+| `--format`         | `json` (default), `table`     | Output format. `table` renders an ASCII table of messages directly to stdout                                                                            |
 
-When `--group-by` is set, the output includes a `groups` array where each group has `key` (field value), `count` (number of messages), and `duration_ms` (time span from first to last message in the group). Use `--sort-direction asc` with `--group-by` for chronological grouping.
+When `--group-by` is set, the output includes a `groups` array where each group has `key` (field value), `count` (number of messages), and `duration_ms` (time span from first to last message in the group). Use `--sort-direction asc` with `--group-by` for chronological grouping. The `--group-by` field is automatically added to the fetched fields, so you do not need to specify it explicitly with `--field`.
 
-When `--all-pages` is set, the CLI automatically paginates through all results. Useful for queries that match more than 500 events.
+When `--all-pages` is set, the CLI automatically paginates through all results. Useful for queries that match more than 500 events. **Caveat:** pagination stops at 10,000 messages. When this limit is reached, a warning is printed to stderr and `metadata.truncated` is set to `true` in the JSON output. If you need more than 10,000 messages, narrow your query or time range.
 
 When `--all-fields` is set and no `--field` flags are provided, the CLI fetches the full list of indexed fields from an on-disk cache (with a configurable TTL) and uses them as the field list. This avoids having to specify `--field` for every field manually. If any `--field` flags are set, `--all-fields` is ignored.
 
@@ -147,7 +149,7 @@ Run an aggregation query.
 
 ```bash
 graylog-cli aggregate <QUERY> --aggregation-type <TYPE> --field <FIELD> \
-  [--size 10] [--interval 1h] [--time-range 1d]
+  [--size 10] [--interval 1h] [--time-range 1d] [--since 1h] [--format json|table]
 ```
 
 | `--aggregation-type`       | Notes                      |
@@ -165,10 +167,10 @@ graylog-cli aggregate <QUERY> --aggregation-type <TYPE> --field <FIELD> \
 Count messages grouped by log level. Equivalent to a `terms` aggregation on the `level` field.
 
 ```bash
-graylog-cli count-by-level --time-range 1h
+graylog-cli count-by-level --time-range 1h [--since 1h] [--format json|table]
 ```
 
-Accepts `--time-range` / `--from`/`--to`.
+Accepts `--time-range` / `--from`/`--to` / `--since`. Use `--format table` for a quick human-readable view.
 
 ### streams
 
@@ -199,10 +201,16 @@ graylog-cli system info
 List all indexed fields available for querying and filtering.
 
 ```bash
-graylog-cli fields
+graylog-cli fields [--refresh]
 ```
 
-Returns every field name that Graylog has indexed across all messages. Use this to discover what fields you can pass to `--field`, use in queries (`field:value`), or aggregate on. No flags required.
+Returns every field name that Graylog has indexed across all messages. Use this to discover what fields you can pass to `--field`, use in queries (`field:value`), or aggregate on.
+
+| Flag        | Notes                                                                                              |
+| ----------- | -------------------------------------------------------------------------------------------------- |
+| `--refresh` | Bypass the on-disk cache and fetch fresh fields from Graylog, then update the cache with the result |
+
+Without `--refresh`, results may be served from an on-disk cache to avoid a round-trip on every query. Use `--refresh` when newly indexed fields are not appearing in results.
 
 ### ping
 
