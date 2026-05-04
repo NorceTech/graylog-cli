@@ -2,6 +2,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use tracing_subscriber::EnvFilter;
+
 use clap::Parser;
 use graylog_cli::application::ports::config_store::ConfigStore;
 use graylog_cli::application::ports::updater::UpdaterError;
@@ -27,6 +29,11 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
     let cli = match parse_cli() {
         Ok(cli) => cli,
         Err(exit_code) => std::process::exit(exit_code),

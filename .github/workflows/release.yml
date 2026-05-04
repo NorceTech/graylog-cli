@@ -138,7 +138,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
-          find . -type f | sort | xargs sha256sum | sed 's|./[^/]*/||' > checksums.txt
+          find . -type f -not -name checksums.txt | sort | xargs sha256sum | sed 's|./[^/]*/||' > checksums.txt
           cat checksums.txt
 
       - name: Create GitHub Release
