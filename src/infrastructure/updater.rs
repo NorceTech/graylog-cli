@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use reqwest::{Client, StatusCode, header};
+use reqwest::{Client, header};
 use serde::Deserialize;
 
 use crate::application::ports::updater::{ReleaseInfo, UpdaterError, UpdaterGateway};
@@ -94,11 +94,6 @@ impl UpdaterGateway for GitHubUpdaterGateway {
             .map_err(|error| UpdaterError::Download(error.to_string()))?;
 
         let status = response.status();
-        if status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY {
-            return Err(UpdaterError::Download(format!(
-                "unexpected redirect {status} while downloading asset"
-            )));
-        }
         if !status.is_success() {
             return Err(UpdaterError::Download(format!(
                 "asset download returned HTTP {status}"

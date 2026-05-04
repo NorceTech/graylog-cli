@@ -1,4 +1,8 @@
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::domain::error::{CliError, ValidationError};
 use crate::domain::models::{
@@ -47,7 +51,7 @@ pub enum Commands {
     /// Check that Graylog is reachable.
     Ping,
     /// List all indexed fields.
-    Fields,
+    Fields(FieldsArgs),
     /// Upgrade graylog-cli to the latest released version.
     Upgrade,
     /// Internal: background worker that checks for updates and stages a newer binary.
@@ -70,10 +74,17 @@ impl Commands {
             }
             Self::Streams { command } => command.validate(),
             Self::System { .. } => Ok(()),
-            Self::Fields => Ok(()),
+            Self::Fields(_) => Ok(()),
             Self::Upgrade | Self::SelfUpdateWorker => Ok(()),
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub struct FieldsArgs {
+    /// Bypass the local cache and fetch fresh fields from Graylog.
+    #[arg(long = "refresh")]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Args)]
@@ -110,6 +121,8 @@ pub struct SearchArgs {
     pub all_fields: bool,
     #[arg(long = "stream-id")]
     pub stream_id: Vec<String>,
+    #[arg(long = "format", value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
 }
 
 impl SearchArgs {
@@ -144,6 +157,8 @@ pub struct AggregateArgs {
     pub interval: Option<String>,
     #[command(flatten)]
     pub timerange: TimerangeArgs,
+    #[arg(long = "format", value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
 }
 
 impl AggregateArgs {
@@ -184,6 +199,8 @@ impl AggregateArgs {
 pub struct CountByLevelArgs {
     #[command(flatten)]
     pub timerange: TimerangeArgs,
+    #[arg(long = "format", value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
 }
 
 impl CountByLevelArgs {
@@ -302,10 +319,60 @@ pub struct TimerangeArgs {
     pub from: Option<String>,
     #[arg(long = "to")]
     pub to: Option<String>,
+    /// Shorthand for an absolute time range ending now; accepts humantime durations like 1h, 30m, 7d.
+    #[arg(long = "since", conflicts_with_all = ["time_range", "from", "to"])]
+    pub since: Option<String>,
 }
 
 impl TimerangeArgs {
     pub fn try_into_timerange(&self) -> Result<Option<CommandTimerange>, ValidationError> {
+        if let Some(since) = &self.since {
+            let duration = humantime::parse_duration(since.trim()).map_err(|_| {
+                ValidationError::InvalidTimerange {
+                    message: format!(
+                        "`--since` value `{since}` must be a positive duration like 15m, 1h, 5d, or 1w"
+                    ),
+                }
+            })?;
+            if duration == Duration::ZERO {
+                return Err(ValidationError::InvalidTimerange {
+                    message: "`--since` duration must be positive".to_string(),
+                });
+            }
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default();
+            let to_secs = now.as_secs() as i64;
+            let from_secs = to_secs.saturating_sub(duration.as_secs() as i64);
+            let to_dt = OffsetDateTime::from_unix_timestamp(to_secs).map_err(|_| {
+                ValidationError::InvalidTimerange {
+                    message: "could not compute `--to` from current time".to_string(),
+                }
+            })?;
+            let from_dt = OffsetDateTime::from_unix_timestamp(from_secs).map_err(|_| {
+                ValidationError::InvalidTimerange {
+                    message: "could not compute `--from` from current time".to_string(),
+                }
+            })?;
+            let from_str =
+                from_dt
+                    .format(&Rfc3339)
+                    .map_err(|_| ValidationError::InvalidTimerange {
+                        message: "could not format `--from` timestamp".to_string(),
+                    })?;
+            let to_str = to_dt
+                .format(&Rfc3339)
+                .map_err(|_| ValidationError::InvalidTimerange {
+                    message: "could not format `--to` timestamp".to_string(),
+                })?;
+            return CommandTimerange::from_input(TimerangeInput {
+                relative: None,
+                from: Some(from_str),
+                to: Some(to_str),
+            })
+            .map(Some);
+        }
+
         if self.time_range.is_none() && self.from.is_none() && self.to.is_none() {
             return Ok(None);
         }
@@ -317,6 +384,15 @@ impl TimerangeArgs {
         })
         .map(Some)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum OutputFormat {
+    /// JSON output (default).
+    #[default]
+    Json,
+    /// ASCII table output.
+    Table,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -610,7 +686,17 @@ mod tests {
     #[test]
     fn fields_needs_no_args() {
         let cli = parse(&["graylog-cli", "fields"]).expect("fields should parse");
-        assert!(matches!(cli.command, Commands::Fields));
+        assert!(matches!(cli.command, Commands::Fields(_)));
+    }
+
+    #[test]
+    fn fields_refresh_flag() {
+        let cli =
+            parse(&["graylog-cli", "fields", "--refresh"]).expect("fields --refresh should parse");
+        assert!(matches!(
+            cli.command,
+            Commands::Fields(FieldsArgs { refresh: true })
+        ));
     }
 
     // --- Limit validation tests ---
@@ -702,5 +788,65 @@ mod tests {
             "invalid",
         ]);
         assert!(result.is_err(), "invalid sort-direction should be rejected");
+    }
+
+    // --- --since tests ---
+
+    #[test]
+    fn since_flag_is_accepted() {
+        let cli = parse(&["graylog-cli", "search", "test", "--since", "1h"])
+            .expect("--since 1h should parse");
+
+        match cli.command {
+            Commands::Search(args) => {
+                assert_eq!(args.timerange.since.as_deref(), Some("1h"));
+            }
+            _ => panic!("expected Search command"),
+        }
+    }
+
+    #[test]
+    fn since_conflicts_with_from() {
+        let result = parse(&[
+            "graylog-cli",
+            "search",
+            "test",
+            "--since",
+            "1h",
+            "--from",
+            "2026-01-01T00:00:00Z",
+        ]);
+        assert!(result.is_err(), "--since and --from should conflict");
+    }
+
+    #[test]
+    fn since_conflicts_with_time_range() {
+        let result = parse(&[
+            "graylog-cli",
+            "search",
+            "test",
+            "--since",
+            "1h",
+            "--time-range",
+            "1h",
+        ]);
+        assert!(result.is_err(), "--since and --time-range should conflict");
+    }
+
+    #[test]
+    fn since_produces_absolute_timerange() {
+        let args = TimerangeArgs {
+            time_range: None,
+            from: None,
+            to: None,
+            since: Some("1h".to_string()),
+        };
+        let result = args
+            .try_into_timerange()
+            .expect("should produce a timerange");
+        assert!(
+            matches!(result, Some(CommandTimerange::Absolute(_))),
+            "expected absolute timerange from --since"
+        );
     }
 }

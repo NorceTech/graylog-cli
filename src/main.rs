@@ -12,9 +12,11 @@ use graylog_cli::domain::error::ValidationError;
 use graylog_cli::infrastructure::config_store::FileConfigStore;
 use graylog_cli::infrastructure::graylog_client::ReqwestGraylogGatewayFactory;
 use graylog_cli::infrastructure::updater::GitHubUpdaterGateway;
-use graylog_cli::presentation::cli::{Cli, Commands, StreamsCommands, SystemCommands};
+use graylog_cli::presentation::cli::{
+    Cli, Commands, FieldsArgs, OutputFormat, StreamsCommands, SystemCommands,
+};
 use graylog_cli::presentation::output::{
-    ErrorEnvelope, exit_code_for_cli_error, print_error_json, print_json,
+    ErrorEnvelope, exit_code_for_cli_error, print_error_json, print_json, print_table,
 };
 use secrecy::SecretString;
 use url::Url;
@@ -93,25 +95,37 @@ async fn run(
             emit_json_success(&status);
         }
         Commands::Search(args) => {
-            emit_json_success(
-                &service
-                    .search(args.to_input().map_err(CliError::from)?)
-                    .await?,
-            );
+            let format = args.format;
+            let status = service
+                .search(args.to_input().map_err(CliError::from)?)
+                .await?;
+            if format == OutputFormat::Table {
+                emit_table_success(&status.messages);
+            } else {
+                emit_json_success(&status);
+            }
         }
         Commands::Aggregate(args) => {
-            emit_json_success(
-                &service
-                    .aggregate(args.to_input().map_err(CliError::from)?)
-                    .await?,
-            );
+            let format = args.format;
+            let status = service
+                .aggregate(args.to_input().map_err(CliError::from)?)
+                .await?;
+            if format == OutputFormat::Table {
+                emit_table_success(&status.rows);
+            } else {
+                emit_json_success(&status);
+            }
         }
         Commands::CountByLevel(args) => {
-            emit_json_success(
-                &service
-                    .count_by_level(args.to_input().map_err(CliError::from)?)
-                    .await?,
-            );
+            let format = args.format;
+            let status = service
+                .count_by_level(args.to_input().map_err(CliError::from)?)
+                .await?;
+            if format == OutputFormat::Table {
+                emit_table_success(&status.rows);
+            } else {
+                emit_json_success(&status);
+            }
         }
         Commands::Streams {
             command: streams_command,
@@ -148,8 +162,8 @@ async fn run(
                 emit_json_success(&service.system_info().await?);
             }
         },
-        Commands::Fields => {
-            emit_json_success(&service.fields().await?);
+        Commands::Fields(FieldsArgs { refresh }) => {
+            emit_json_success(&service.fields(refresh).await?);
         }
         Commands::Ping => {
             emit_json_success(&service.ping().await?);
@@ -216,6 +230,13 @@ where
     T: serde::Serialize,
 {
     if let Err(error) = print_json(value) {
+        let _ = print_error_json(&ErrorEnvelope::from_message(1, error.to_string()));
+        std::process::exit(1);
+    }
+}
+
+fn emit_table_success(rows: &[serde_json::Map<String, serde_json::Value>]) {
+    if let Err(error) = print_table(rows) {
         let _ = print_error_json(&ErrorEnvelope::from_message(1, error.to_string()));
         std::process::exit(1);
     }

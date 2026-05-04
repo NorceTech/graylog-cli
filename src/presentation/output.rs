@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::domain::error::{CliError, HttpError};
 
@@ -51,6 +52,80 @@ where
     let mut handle = stderr.lock();
     serde_json::to_writer_pretty(&mut handle, value)?;
     handle.write_all(b"\n")
+}
+
+/// Render a slice of JSON objects as an ASCII table to stdout.
+///
+/// Columns are the union of all keys across all rows, in insertion order of
+/// the first row that introduces each key.  Values are formatted with their
+/// JSON representation (strings are unquoted, nulls shown as `-`).
+pub fn print_table(rows: &[serde_json::Map<String, Value>]) -> io::Result<()> {
+    if rows.is_empty() {
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        writeln!(handle, "(no rows)")?;
+        return Ok(());
+    }
+
+    // Collect ordered, deduplicated column names.
+    let mut columns: Vec<String> = Vec::new();
+    for row in rows {
+        for key in row.keys() {
+            if !columns.contains(key) {
+                columns.push(key.clone());
+            }
+        }
+    }
+
+    // Compute display value for each cell.
+    let cell_value = |row: &serde_json::Map<String, Value>, col: &str| -> String {
+        match row.get(col) {
+            None | Some(Value::Null) => "-".to_string(),
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => v.to_string(),
+        }
+    };
+
+    // Determine column widths (header width vs max cell width).
+    let col_widths: Vec<usize> = columns
+        .iter()
+        .map(|col| {
+            let header_width = col.len();
+            let max_cell = rows
+                .iter()
+                .map(|row| cell_value(row, col).len())
+                .max()
+                .unwrap_or(0);
+            header_width.max(max_cell)
+        })
+        .collect();
+
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+
+    // Header row.
+    let header: Vec<String> = columns
+        .iter()
+        .zip(&col_widths)
+        .map(|(col, &w)| format!("{col:<w$}"))
+        .collect();
+    writeln!(handle, "{}", header.join("  "))?;
+
+    // Separator.
+    let sep: Vec<String> = col_widths.iter().map(|&w| "-".repeat(w)).collect();
+    writeln!(handle, "{}", sep.join("  "))?;
+
+    // Data rows.
+    for row in rows {
+        let cells: Vec<String> = columns
+            .iter()
+            .zip(&col_widths)
+            .map(|(col, &w)| format!("{:<w$}", cell_value(row, col)))
+            .collect();
+        writeln!(handle, "{}", cells.join("  "))?;
+    }
+
+    Ok(())
 }
 
 pub fn exit_code_for_cli_error(error: &CliError) -> i32 {

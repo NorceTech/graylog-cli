@@ -101,6 +101,9 @@ impl GraylogClient {
         {
             Ok(response) => response,
             Err(error) if should_retry_aggregate_with_legacy_grouping(request, &error) => {
+                eprintln!(
+                    "warning: aggregate query returned HTTP 400; retrying with legacy grouping format"
+                );
                 let fallback_payload = self.aggregate_search_payload(request, true)?;
                 self.send_json(Method::POST, SEARCH_AGGREGATE_PATH, Some(fallback_payload))
                     .await?

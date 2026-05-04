@@ -1,12 +1,12 @@
 use std::process::Command;
 
 fn graylog_cli() -> Command {
-    Command::new("cargo")
+    Command::new(env!("CARGO_BIN_EXE_graylog-cli"))
 }
 
 fn run(args: &[&str]) -> std::process::Output {
     let mut cmd = graylog_cli();
-    cmd.args(["run", "--"]).args(args);
+    cmd.args(args);
     cmd.output().expect("failed to run graylog-cli")
 }
 
