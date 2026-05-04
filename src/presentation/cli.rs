@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use time::OffsetDateTime;
@@ -334,9 +334,9 @@ impl TimerangeArgs {
                     ),
                 }
             })?;
-            if duration == Duration::ZERO {
+            if duration.as_secs() == 0 {
                 return Err(ValidationError::InvalidTimerange {
-                    message: "`--since` duration must be positive".to_string(),
+                    message: "`--since` duration must be at least one second".to_string(),
                 });
             }
             let now = SystemTime::now()

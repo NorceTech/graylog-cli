@@ -293,6 +293,7 @@ pub fn current_asset_name() -> Result<&'static str, UpdaterError> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Ok("graylog-cli-macos-aarch64"),
         ("linux", "x86_64") => Ok("graylog-cli-linux-x86_64"),
+        ("linux", "aarch64") => Ok("graylog-cli-linux-aarch64"),
         ("windows", "x86_64") => Ok("graylog-cli-windows-x86_64.exe"),
         (os, arch) => Err(UpdaterError::UnsupportedPlatform(format!("{os}/{arch}"))),
     }
