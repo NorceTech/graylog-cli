@@ -1,2 +1,5 @@
-[build]
-rustflags = ["-Ctarget-cpu=native"]
+# target-cpu=native is intentionally not set here — it breaks cross-compilation
+# and CI builds. Add it to your local ~/.cargo/config.toml if you want it:
+#
+#   [build]
+#   rustflags = ["-Ctarget-cpu=native"]
