@@ -33,6 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Patch version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          sed -i "/^name = \"graylog-cli\"$/{n;s/version = \".*\"/version = \"$VERSION\"/;}" Cargo.lock
+
       - uses: DeterminateSystems/nix-installer-action@v22
 
       - name: Update fenix lock
@@ -56,6 +62,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Patch version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          sed -i '' "/^name = \"graylog-cli\"$/{n;s/version = \".*\"/version = \"$VERSION\"/;}" Cargo.lock
+
       - uses: DeterminateSystems/nix-installer-action@v22
 
       - name: Update fenix lock
@@ -78,6 +90,12 @@ jobs:
     needs: verify-main
     steps:
       - uses: actions/checkout@v6
+
+      - name: Patch version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          sed -i "/^name = \"graylog-cli\"$/{n;s/version = \".*\"/version = \"$VERSION\"/;}" Cargo.lock
 
       - uses: DeterminateSystems/nix-installer-action@v22
 

@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "graylog-cli"
-version = "0.0.3-alpha"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "clap",
