@@ -45,11 +45,16 @@
           nativePackage = pkgs.rustPlatform.buildRustPackage (
             commonArgs
             // {
-              # On Darwin, link against the system libiconv rather than the Nix
-              # store copy.  Using -liconv without an explicit -L lets the
-              # dynamic linker resolve /usr/lib/libiconv.2.dylib at runtime, so
-              # the binary works on machines that don't have Nix installed.
-              CARGO_BUILD_RUSTFLAGS = lib.optionalString pkgs.stdenv.isDarwin "-C link-arg=-liconv";
+              # On Darwin, Nix embeds its own store path for libiconv into the
+              # binary.  Rewrite it to the system path so the binary runs on
+              # machines without Nix installed.
+              postInstall = lib.optionalString pkgs.stdenv.isDarwin ''
+                install_name_tool \
+                  -change "$(otool -L $out/bin/graylog-cli \
+                    | awk '/libiconv/{print $1}')" \
+                  /usr/lib/libiconv.2.dylib \
+                  $out/bin/graylog-cli
+              '';
             }
           );
           windowsTarget = "x86_64-pc-windows-gnu";
