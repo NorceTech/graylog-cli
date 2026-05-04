@@ -19,6 +19,7 @@ use graylog_cli::presentation::cli::{
 };
 use graylog_cli::presentation::output::{
     ErrorEnvelope, exit_code_for_cli_error, print_error_json, print_json, print_table,
+    print_upgrade_status,
 };
 use secrecy::SecretString;
 use url::Url;
@@ -182,7 +183,10 @@ async fn run(
                 ))
             })?;
             let status = updater.upgrade_now().await.map_err(CliError::from)?;
-            emit_json_success(&status);
+            if let Err(error) = print_upgrade_status(&status) {
+                let _ = print_error_json(&ErrorEnvelope::from_message(1, error.to_string()));
+                std::process::exit(1);
+            }
         }
         Commands::SelfUpdateWorker => {
             if let Some(updater) = updater {

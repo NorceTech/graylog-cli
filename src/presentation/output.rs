@@ -36,6 +36,31 @@ impl ErrorEnvelope {
     }
 }
 
+pub fn print_upgrade_status(status: &crate::application::updater_service::UpgradeStatus) -> io::Result<()> {
+    use crate::application::updater_service::UpgradeAction;
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    match status.action {
+        UpgradeAction::UpToDate => writeln!(
+            handle,
+            "Already up to date ({})",
+            status.current_version
+        ),
+        UpgradeAction::Applied => writeln!(
+            handle,
+            "Updated: {} -> {}",
+            status.current_version,
+            status.latest_version.as_deref().unwrap_or("?")
+        ),
+        UpgradeAction::Staged => writeln!(
+            handle,
+            "Update staged: {} will be applied on next start",
+            status.latest_version.as_deref().unwrap_or("?")
+        ),
+        UpgradeAction::Skipped => writeln!(handle, "Update skipped"),
+    }
+}
+
 pub fn print_json<T>(value: &T) -> io::Result<()>
 where
     T: Serialize,
@@ -396,6 +421,35 @@ mod tests {
     #[test]
     fn error_kind_for_exit_code_unknown() {
         assert_eq!(error_kind_for_exit_code(99), "internal_error");
+    }
+
+    #[test]
+    fn upgrade_status_up_to_date_message() {
+        use crate::application::updater_service::{UpgradeAction, UpgradeStatus};
+        let status = UpgradeStatus {
+            ok: true,
+            command: "upgrade",
+            current_version: "0.1.0".to_string(),
+            latest_version: Some("0.1.0".to_string()),
+            action: UpgradeAction::UpToDate,
+            message: String::new(),
+        };
+        // Just assert it doesn't panic; actual output goes to stdout.
+        assert!(print_upgrade_status(&status).is_ok());
+    }
+
+    #[test]
+    fn upgrade_status_applied_message() {
+        use crate::application::updater_service::{UpgradeAction, UpgradeStatus};
+        let status = UpgradeStatus {
+            ok: true,
+            command: "upgrade",
+            current_version: "0.1.0".to_string(),
+            latest_version: Some("0.2.0".to_string()),
+            action: UpgradeAction::Applied,
+            message: String::new(),
+        };
+        assert!(print_upgrade_status(&status).is_ok());
     }
 
     #[test]
