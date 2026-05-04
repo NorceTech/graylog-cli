@@ -68,22 +68,6 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@v8
       - run: nix build --print-build-logs
 
-  build-linux-aarch64:
-    name: build (linux-aarch64)
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-      - uses: DeterminateSystems/nix-installer-action@v16
-        with:
-          extra-conf: |
-            extra-platforms = aarch64-linux
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-      - run: nix build --system aarch64-linux --print-build-logs
-
   build-windows:
     name: build (windows-x86_64)
     if: github.event_name == 'push'
