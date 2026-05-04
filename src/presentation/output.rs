@@ -36,16 +36,16 @@ impl ErrorEnvelope {
     }
 }
 
-pub fn print_upgrade_status(status: &crate::application::updater_service::UpgradeStatus) -> io::Result<()> {
+pub fn print_upgrade_status(
+    status: &crate::application::updater_service::UpgradeStatus,
+) -> io::Result<()> {
     use crate::application::updater_service::UpgradeAction;
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     match status.action {
-        UpgradeAction::UpToDate => writeln!(
-            handle,
-            "Already up to date ({})",
-            status.current_version
-        ),
+        UpgradeAction::UpToDate => {
+            writeln!(handle, "Already up to date ({})", status.current_version)
+        }
         UpgradeAction::Applied => writeln!(
             handle,
             "Updated: {} -> {}",
