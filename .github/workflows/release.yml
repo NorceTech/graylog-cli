@@ -14,7 +14,7 @@ jobs:
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -31,9 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: verify-main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/nix-installer-action@v22
 
       - name: Update fenix lock
         run: nix flake lock --update-input fenix
@@ -44,7 +44,7 @@ jobs:
       - name: Prepare artifact
         run: cp result/bin/graylog-cli graylog-cli-linux-x86_64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: graylog-cli-linux-x86_64
           path: graylog-cli-linux-x86_64
@@ -54,9 +54,9 @@ jobs:
     runs-on: macos-latest
     needs: verify-main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/nix-installer-action@v22
 
       - name: Update fenix lock
         run: nix flake lock --update-input fenix
@@ -67,7 +67,7 @@ jobs:
       - name: Prepare artifact
         run: cp result/bin/graylog-cli graylog-cli-macos-aarch64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: graylog-cli-macos-aarch64
           path: graylog-cli-macos-aarch64
@@ -77,9 +77,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: verify-main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/nix-installer-action@v22
 
       - name: Update fenix lock
         run: nix flake lock --update-input fenix
@@ -90,7 +90,7 @@ jobs:
       - name: Prepare artifact
         run: cp result/bin/graylog-cli.exe graylog-cli-windows-x86_64.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: graylog-cli-windows-x86_64.exe
           path: graylog-cli-windows-x86_64.exe
@@ -104,7 +104,7 @@ jobs:
       - build-mac
       - build-windows
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
 
@@ -115,7 +115,7 @@ jobs:
           cat checksums.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.verify-main.outputs.tag }}
           files: |

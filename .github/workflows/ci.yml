@@ -17,8 +17,8 @@ jobs:
     name: flake check (fmt + hooks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
       - run: nix flake check --print-build-logs
 
@@ -26,8 +26,8 @@ jobs:
     name: clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
       - run: nix develop --command cargo clippy --all-targets --locked -- -D warnings
 
@@ -35,8 +35,8 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
       - run: nix develop --command cargo test --all --locked
 
@@ -44,8 +44,8 @@ jobs:
     name: cargo deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
       - run: nix develop --command cargo deny --all-features check
 
@@ -53,8 +53,8 @@ jobs:
     name: build (linux-x86_64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
       - run: nix build --print-build-logs
 
@@ -63,8 +63,8 @@ jobs:
     if: github.event_name == 'push'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
       - run: nix build --print-build-logs
 
@@ -73,7 +73,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
       - run: nix build .#graylog-cli-windows --print-build-logs
