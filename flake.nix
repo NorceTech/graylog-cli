@@ -45,9 +45,11 @@
           nativePackage = pkgs.rustPlatform.buildRustPackage (
             commonArgs
             // {
-              buildInputs = lib.optionals pkgs.stdenv.isDarwin [
-                pkgs.libiconv
-              ];
+              # On Darwin, link against the system libiconv rather than the Nix
+              # store copy.  Using -liconv without an explicit -L lets the
+              # dynamic linker resolve /usr/lib/libiconv.2.dylib at runtime, so
+              # the binary works on machines that don't have Nix installed.
+              CARGO_BUILD_RUSTFLAGS = lib.optionalString pkgs.stdenv.isDarwin "-C link-arg=-liconv";
             }
           );
           windowsTarget = "x86_64-pc-windows-gnu";
