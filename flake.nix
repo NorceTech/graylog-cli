@@ -1,15 +1,23 @@
 {
-  description = "Rust development environment";
+  description = "graylog-cli - Rust CLI for Graylog";
 
   inputs = {
-    flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    git-hooks.url = "github:cachix/git-hooks.nix";
-    git-hooks.inputs.nixpkgs.follows = "nixpkgs";
-    treefmt-nix.url = "github:numtide/treefmt-nix";
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    git-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
+    };
+    crane = {
+      url = "github:ipetkov/crane";
     };
   };
 
@@ -37,14 +45,33 @@
         let
           pname = "graylog-cli";
           version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+
+          windowsTarget = "x86_64-pc-windows-gnu";
+
+          # One toolchain for every build and dev shell: the complete stable
+          # profile (rustc, cargo, clippy, rustfmt, rust-src) plus the Windows
+          # std so the cross build reuses the exact same compiler.
+          toolchain = pkgs.fenix.combine [
+            pkgs.fenix.stable.completeToolchain
+            pkgs.fenix.targets.${windowsTarget}.stable.rust-std
+          ];
+
+          craneLib = (inputs.crane.mkLib pkgs).overrideToolchain toolchain;
+
           commonArgs = {
             inherit pname version;
-            src = self;
-            cargoLock.lockFile = ./Cargo.lock;
+            src = craneLib.cleanCargoSource self;
+            strictDeps = true;
           };
-          nativePackage = pkgs.rustPlatform.buildRustPackage (
+
+          # Dependencies are built once and reused by the package build, so a
+          # source-only change never recompiles the dependency tree.
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+          nativePackage = craneLib.buildPackage (
             commonArgs
             // {
+              inherit cargoArtifacts;
               # On Darwin, Nix embeds its own store path for libiconv into the
               # binary.  Rewrite it to the system path so the binary runs on
               # machines without Nix installed.
@@ -57,81 +84,76 @@
               '';
             }
           );
-          windowsTarget = "x86_64-pc-windows-gnu";
+
+          # The mingw cross build keeps nixpkgs' rustPlatform (crane has no
+          # equivalent of pkgsCross' cross stdenv wiring here), but it is fed
+          # the same fenix toolchain as everything else.
           windowsPkgs = pkgs.pkgsCross.mingwW64;
-          windowsToolchain =
-            with inputs.fenix.packages.${system};
-            combine [
-              stable.cargo
-              stable.rustc
-              targets.${windowsTarget}.stable.rust-std
-            ];
           windowsRustPlatform = windowsPkgs.makeRustPlatform {
-            cargo = windowsToolchain;
-            rustc = windowsToolchain;
+            cargo = toolchain;
+            rustc = toolchain;
           };
-          windowsPackage = windowsRustPlatform.buildRustPackage (
-            commonArgs
-            // {
-              cargoBuildTarget = windowsTarget;
-              depsBuildBuild = lib.optionals pkgs.stdenv.isDarwin [
-                pkgs.libiconv
-              ];
-              NIX_LDFLAGS = lib.optionalString pkgs.stdenv.isDarwin "-L${pkgs.libiconv}/lib";
-              stdenv = windowsPkgs.stdenv;
-            }
-          );
+          windowsPackage = windowsRustPlatform.buildRustPackage {
+            inherit pname version;
+            src = self;
+            cargoLock.lockFile = ./Cargo.lock;
+            cargoBuildTarget = windowsTarget;
+            depsBuildBuild = lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.libiconv
+            ];
+            NIX_LDFLAGS = lib.optionalString pkgs.stdenv.isDarwin "-L${pkgs.libiconv}/lib";
+            stdenv = windowsPkgs.stdenv;
+          };
         in
         {
           packages = {
             default = nativePackage;
             graylog-cli-windows = windowsPackage;
           };
+
           treefmt = {
             programs.nixfmt.enable = true;
             programs.nixfmt.package = pkgs.nixfmt;
             programs.rustfmt.enable = true;
+            programs.rustfmt.package = toolchain;
+            programs.prettier.enable = true;
           };
+
           pre-commit.settings.hooks = {
             treefmt.enable = true;
           };
-          devShells.default = pkgs.mkShell {
-            inherit (config.pre-commit) shellHook;
-            packages =
-              with pkgs;
-              [
-                rustToolchain
-                cargo-deny
-                cargo-edit
-                cargo-watch
-                cargo-wizard
-                cargo-nextest
-                rust-analyzer
+
+          devShells = {
+            default = pkgs.mkShell {
+              inherit (config.pre-commit) shellHook;
+              # rust-analyzer ships inside the complete toolchain above.
+              packages = [
+                toolchain
+                pkgs.bacon
+                pkgs.cargo-deny
+                pkgs.cargo-edit
               ]
               ++ config.pre-commit.settings.enabledPackages;
+              env = {
+                RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+              };
+            };
 
-            env = {
-              RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
+            # Lean shell for CI jobs that only need cargo + cargo-deny.
+            ci = pkgs.mkShell {
+              packages = [
+                toolchain
+                pkgs.cargo-deny
+              ];
             };
           };
+
           _module.args.pkgs = import inputs.nixpkgs {
             inherit system;
             overlays = lib.attrValues self.overlays;
           };
         };
-      flake.overlays.default = final: prev: {
-        rustToolchain =
-          with inputs.fenix.packages.${prev.stdenv.hostPlatform.system};
-          combine (
-            with stable;
-            [
-              clippy
-              rustc
-              cargo
-              rustfmt
-              rust-src
-            ]
-          );
-      };
+
+      flake.overlays.fenix = inputs.fenix.overlays.default;
     };
 }

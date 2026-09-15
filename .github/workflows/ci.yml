@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
-      - run: nix develop --command cargo clippy --all-targets --locked -- -D warnings
+      - run: nix develop .#ci --command cargo clippy --all-targets --locked -- -D warnings
 
   test:
     name: test
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
-      - run: nix develop --command cargo test --all --locked
+      - run: nix develop .#ci --command cargo test --all --locked
 
   deny:
     name: cargo deny
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@v22
       - run: nix flake lock --update-input fenix
-      - run: nix develop --command cargo deny --all-features check
+      - run: nix develop .#ci --command cargo deny --all-features check
 
   build-linux:
     name: build (linux-x86_64)
