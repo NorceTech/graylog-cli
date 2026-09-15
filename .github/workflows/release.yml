@@ -103,7 +103,18 @@ jobs:
         run: nix flake lock --update-input fenix
 
       - name: Build Windows binary
-        run: nix build .#graylog-cli-windows
+        # crates.io rate-limits Nix's parallel crate fetches (HTTP 403) on
+        # shared CI egress IPs. Nix resumes cached store paths, so retrying
+        # the same command converges instead of rebuilding from scratch.
+        run: |
+          for attempt in 1 2 3 4; do
+            if nix build .#graylog-cli-windows; then
+              break
+            fi
+            echo "windows build attempt $attempt failed; retrying in 120s..."
+            sleep 120
+            if [ "$attempt" = 4 ]; then exit 1; fi
+          done
 
       - name: Prepare artifact
         run: cp result/bin/graylog-cli.exe graylog-cli-windows-x86_64.exe
