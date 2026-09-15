@@ -92,6 +92,15 @@ impl ApplicationService {
         let (mut profiles, updater) = existing
             .map(|config| (config.profiles, config.updater))
             .unwrap_or_default();
+        if let Some(conflict) = case_conflict(&profiles, &profile_name) {
+            return Err(CliError::Validation(ValidationError::InvalidValue {
+                field: "profile",
+                message: format!(
+                    "profile `{profile_name}` conflicts with existing profile `{conflict}` (names are case-insensitive on some filesystems)"
+                ),
+            })
+            .into());
+        }
         profiles.insert(
             profile_name.clone(),
             GraylogConfig::new(
@@ -109,6 +118,13 @@ impl ApplicationService {
             .save(config)
             .await
             .or_raise(|| CliError::Config("failed to persist config".to_string()))?;
+
+        // Re-auth may point the profile at a different server; drop its
+        // fields cache so the next command cannot serve the old list.
+        let _ = self
+            .fields_cache_store
+            .remove_serialized(&fields_cache_key(&profile_name))
+            .await;
 
         Ok(AuthStatus::ok(base_url.to_string(), profile_name))
     }
@@ -244,6 +260,15 @@ impl ApplicationService {
 
         let mut config = self.load_config().await?;
         let graylog = self.require_profile(&config, old_name)?;
+        if let Some(conflict) = case_conflict(&config.profiles, new_name) {
+            return Err(CliError::Validation(ValidationError::InvalidValue {
+                field: "profile",
+                message: format!(
+                    "profile `{new_name}` conflicts with existing profile `{conflict}` (names are case-insensitive on some filesystems)"
+                ),
+            })
+            .into());
+        }
         if config.profiles.contains_key(new_name) {
             let available = config
                 .profiles
@@ -886,6 +911,17 @@ fn unknown_profile_message(name: &str, profiles: &BTreeMap<String, GraylogConfig
 /// cache file name valid on Windows.
 fn fields_cache_key(profile: &str) -> String {
     format!("fields-{profile}")
+}
+
+/// Existing profile name that differs from `name` only by case, if any.
+/// Profile names are case-sensitive map keys, but the fields cache files
+/// live on filesystems that may not be (default macOS/Windows), so
+/// case-only distinct names would silently share one cache file.
+fn case_conflict(profiles: &BTreeMap<String, GraylogConfig>, name: &str) -> Option<String> {
+    profiles
+        .keys()
+        .find(|key| key.eq_ignore_ascii_case(name) && key.as_str() != name)
+        .cloned()
 }
 
 fn apply_grouping(mut status: MessageSearchStatus, group_by: &str) -> MessageSearchStatus {
@@ -2729,6 +2765,57 @@ mod tests {
             .await
             .expect_err("invalid source should fail");
         assert_profile_validation_error(error, "profile names must");
+    }
+
+    #[tokio::test]
+    async fn authenticate_invalidates_profile_fields_cache() {
+        let cache_store = FakeCacheStore::default();
+        cache_store.insert("fields-default", "{\"stale\":true}".to_string());
+        let (service, _, cache_store) = service_with_gateway(
+            FakeConfigStore::empty(),
+            cache_store,
+            FakeGraylogGateway::new(),
+        );
+        service
+            .authenticate(
+                Url::parse("http://localhost:9000").expect("test URL should parse"),
+                secrecy::SecretString::new("test-token".to_owned().into()),
+            )
+            .await
+            .expect("authentication should succeed");
+        assert!(cache_store.get("fields-default").is_none());
+    }
+
+    #[tokio::test]
+    async fn authenticate_rejects_case_conflicting_profile_name() {
+        let (service, _, _, _) = service_with_gateway_and_profile(
+            FakeConfigStore::new(multi_profile_config()),
+            FakeCacheStore::default(),
+            FakeGraylogGateway::new(),
+            Some("ALPHA"),
+        );
+        let error = service
+            .authenticate(
+                Url::parse("http://localhost:9000").expect("test URL should parse"),
+                secrecy::SecretString::new("test-token".to_owned().into()),
+            )
+            .await
+            .expect_err("case-conflicting profile should fail");
+        assert_profile_validation_error(error, "conflicts with existing profile `alpha`");
+    }
+
+    #[tokio::test]
+    async fn profiles_rename_rejects_case_conflicting_target() {
+        let (service, _, _) = service_with_gateway(
+            FakeConfigStore::new(multi_profile_config()),
+            FakeCacheStore::default(),
+            FakeGraylogGateway::new(),
+        );
+        let error = service
+            .profiles_rename("beta", "ALPHA")
+            .await
+            .expect_err("case-conflicting target should fail");
+        assert_profile_validation_error(error, "conflicts with existing profile `alpha`");
     }
 
     #[tokio::test]

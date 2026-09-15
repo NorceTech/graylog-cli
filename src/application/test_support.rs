@@ -47,5 +47,13 @@ pub(crate) mod fakes {
                 .insert(key, data);
             Ok(())
         }
+
+        async fn remove_serialized(&self, key: &str) -> exn::Result<(), CacheError> {
+            self.storage
+                .lock()
+                .expect("cache mutex should not be poisoned")
+                .remove(key);
+            Ok(())
+        }
     }
 }

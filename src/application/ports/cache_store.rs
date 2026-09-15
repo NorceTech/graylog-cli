@@ -16,4 +16,8 @@ pub trait CacheStore: Send + Sync {
     async fn get_serialized(&self, key: &str) -> exn::Result<Option<String>, CacheError>;
 
     async fn save_serialized(&self, key: String, data: String) -> exn::Result<(), CacheError>;
+
+    /// Drops a cached entry; missing keys are not an error. Used to
+    /// invalidate per-profile caches when a profile is replaced.
+    async fn remove_serialized(&self, key: &str) -> exn::Result<(), CacheError>;
 }

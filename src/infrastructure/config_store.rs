@@ -166,6 +166,19 @@ impl CacheStore for FileConfigStore {
         .map_err(|error| CacheError::StoreUnavailable(format!("failed to write cache: {error}")))?
         .map_err(Into::into)
     }
+
+    async fn remove_serialized(&self, key: &str) -> exn::Result<(), CacheError> {
+        let cache_path = Self::cache_path_for_key(key)?;
+
+        task::spawn_blocking(move || match std::fs::remove_file(&cache_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(CacheError::OperationFailure(error.to_string())),
+        })
+        .await
+        .map_err(|error| CacheError::StoreUnavailable(format!("failed to clear cache: {error}")))?
+        .map_err(Into::into)
+    }
 }
 
 fn write_config_atomically(config_path: &Path, serialized: &str) -> Result<(), ConfigError> {

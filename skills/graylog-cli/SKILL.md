@@ -34,12 +34,12 @@ graylog-cli auth --url <URL> --token <TOKEN>
 
 Config is stored at:
 
-| Condition                | Path                                       |
-| ------------------------ | ------------------------------------------ |
-| `XDG_CONFIG_HOME` is set (Linux) | `$XDG_CONFIG_HOME/graylog-cli/config.toml` |
-| macOS default            | `~/Library/Application Support/graylog-cli/config.toml` |
-| Linux default            | `$HOME/.config/graylog-cli/config.toml`    |
-| Windows default          | `%APPDATA%\graylog-cli\config.toml`        |
+| Condition                        | Path                                                    |
+| -------------------------------- | ------------------------------------------------------- |
+| `XDG_CONFIG_HOME` is set (Linux) | `$XDG_CONFIG_HOME/graylog-cli/config.toml`              |
+| macOS default                    | `~/Library/Application Support/graylog-cli/config.toml` |
+| Linux default                    | `$HOME/.config/graylog-cli/config.toml`                 |
+| Windows default                  | `%APPDATA%\graylog-cli\config.toml`                     |
 
 On Unix, directory permissions are `0700` and file permissions are `0600`. On Windows, NTFS ACLs inherit from the parent directory — no explicit permission hardening is applied.
 
@@ -72,7 +72,7 @@ graylog-cli profiles rename old new    # rename a profile (follows the active se
 graylog-cli profiles delete staging    # remove a profile
 ```
 
-Every command runs against the active profile. Use the global `--profile` flag (or `GRAYLOG_PROFILE` env var) to target another profile for one invocation without switching: `graylog-cli --profile staging search 'level:ERROR'`. `ping` reports which profile it used (`profile`) and which are available (`available_profiles`). Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`.
+Every command runs against the active profile. Use the global `--profile` flag (or `GRAYLOG_PROFILE` env var) to target another profile for one invocation without switching: `graylog-cli --profile staging search 'level:ERROR'`. `ping` reports which profile it used (`profile`) and which are available (`available_profiles`). Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`. Names that differ only by case from an existing profile are rejected.
 
 ## Graylog Query Language
 

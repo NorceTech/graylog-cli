@@ -63,6 +63,10 @@
             inherit pname version;
             src = craneLib.cleanCargoSource self;
             strictDeps = true;
+            # Integration tests need loopback networking (the ping test serves
+            # a local HTTP server), which the nix sandbox blocks. The suite
+            # runs with network in the CI test job instead.
+            doCheck = false;
           };
 
           # Dependencies are built once and reused by the package build, so a

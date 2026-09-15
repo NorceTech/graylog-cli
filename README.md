@@ -237,7 +237,7 @@ graylog-cli profiles rename staging prod  # rename a profile
 graylog-cli profiles delete staging       # remove a profile
 ```
 
-Deleting the active profile clears the active selection; the CLI then falls back to the first remaining profile. Deleting the last profile returns the CLI to its not-configured state. Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`.
+Deleting the active profile clears the active selection; the CLI then falls back to the first remaining profile. Deleting the last profile returns the CLI to its not-configured state. Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`. Names that differ only by case from an existing profile are rejected, since the cache files live on filesystems that may be case-insensitive.
 
 The fields cache is scoped per profile (`fields-<profile>` cache files), so switching profiles never serves stale field lists from another instance.
 
