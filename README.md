@@ -59,11 +59,11 @@ graylog-cli <command> --help
 
 Most commands accept a time range. Three forms are supported:
 
-| Flag | Description | Example |
-|------|-------------|---------|
-| `--since <duration>` | Relative to now, shorthand | `--since 1h`, `--since 30m`, `--since 7d` |
-| `--time-range <duration>` | Relative to now, Graylog-style | `--time-range 1h` |
-| `--from <ts> --to <ts>` | Absolute range (RFC 3339) | `--from 2024-01-01T00:00:00Z --to 2024-01-02T00:00:00Z` |
+| Flag                      | Description                    | Example                                                 |
+| ------------------------- | ------------------------------ | ------------------------------------------------------- |
+| `--since <duration>`      | Relative to now, shorthand     | `--since 1h`, `--since 30m`, `--since 7d`               |
+| `--time-range <duration>` | Relative to now, Graylog-style | `--time-range 1h`                                       |
+| `--from <ts> --to <ts>`   | Absolute range (RFC 3339)      | `--from 2024-01-01T00:00:00Z --to 2024-01-02T00:00:00Z` |
 
 `--since` and `--time-range` are mutually exclusive with `--from`/`--to`.
 
