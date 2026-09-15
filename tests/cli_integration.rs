@@ -46,6 +46,8 @@ impl TestEnv {
         cmd.args(args)
             .env("HOME", self.config_home())
             .env("XDG_CONFIG_HOME", self.config_home())
+            // dirs::config_dir() reads %APPDATA% on Windows, ignoring HOME.
+            .env("APPDATA", self.config_home())
             .env("GRAYLOG_CLI_AUTO_UPDATE", "0")
             .env_remove("GRAYLOG_PROFILE")
             .env_remove("GRAYLOG_TOKEN");

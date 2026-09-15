@@ -137,6 +137,11 @@ impl ApplicationService {
             .await
             .or_raise(|| CliError::Config("failed to load runtime config".to_string()))?
             .unwrap_or_default();
+        // A mistyped --profile/GRAYLOG_PROFILE must fail here too, not
+        // surface as a phantom active profile with no summaries.
+        if let Some(override_name) = &self.profile_override {
+            self.require_profile(&config, override_name)?;
+        }
         let active = self.effective_active_profile(&config);
 
         Ok(ProfilesStatus {
@@ -155,6 +160,9 @@ impl ApplicationService {
     /// Shows a single profile; `name` defaults to the resolved active profile.
     pub async fn profiles_show(&self, name: Option<&str>) -> exn::Result<ProfileStatus, CliError> {
         let config = self.load_config().await?;
+        if let Some(override_name) = &self.profile_override {
+            self.require_profile(&config, override_name)?;
+        }
         let (name, graylog) = match name {
             Some(name) => (name.to_string(), self.require_profile(&config, name)?),
             None => self.select_profile(&config)?,
@@ -2627,6 +2635,36 @@ mod tests {
             .profiles_show(Some("gamma"))
             .await
             .expect_err("unknown profile should fail");
+        assert_profile_validation_error(error, "unknown profile `gamma`");
+    }
+
+    #[tokio::test]
+    async fn profiles_list_rejects_unknown_override() {
+        let (service, _, _, _) = service_with_gateway_and_profile(
+            FakeConfigStore::new(multi_profile_config()),
+            FakeCacheStore::default(),
+            FakeGraylogGateway::new(),
+            Some("gamma"),
+        );
+        let error = service
+            .profiles_list()
+            .await
+            .expect_err("unknown override should fail");
+        assert_profile_validation_error(error, "unknown profile `gamma`");
+    }
+
+    #[tokio::test]
+    async fn profiles_show_named_rejects_unknown_override() {
+        let (service, _, _, _) = service_with_gateway_and_profile(
+            FakeConfigStore::new(multi_profile_config()),
+            FakeCacheStore::default(),
+            FakeGraylogGateway::new(),
+            Some("gamma"),
+        );
+        let error = service
+            .profiles_show(Some("alpha"))
+            .await
+            .expect_err("unknown override should fail");
         assert_profile_validation_error(error, "unknown profile `gamma`");
     }
 

@@ -102,6 +102,9 @@
             inherit pname version;
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
+            # Same reason as crane above: the ping integration test needs
+            # loopback networking, unavailable in the nix sandbox.
+            doCheck = false;
             cargoBuildTarget = windowsTarget;
             depsBuildBuild = lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv

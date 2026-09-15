@@ -65,7 +65,7 @@ graylog-cli/
 ## UNIQUE STYLES
 
 - `lib.rs` is 4 lines; `main.rs` wires `Arc<FileConfigStore>` twice (config + cache).
-- Fields cache single global key `"fields"` with TTL 300s.
+- Fields cache is per profile (`fields-<profile>.json` next to `config.toml`) with TTL 300s.
 - Release patches `Cargo.toml` version from tag; `publish=false`, ships binaries only.
 
 ## COMMANDS

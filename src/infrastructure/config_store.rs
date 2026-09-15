@@ -10,7 +10,9 @@ use tokio::task;
 
 use crate::application::ports::cache_store::{CacheError, CacheStore};
 use crate::application::ports::config_store::{ConfigError, ConfigStore};
-use crate::domain::config::{Config, DEFAULT_PROFILE_NAME, GraylogConfig, UpdaterConfig};
+use crate::domain::config::{
+    Config, DEFAULT_PROFILE_NAME, GraylogConfig, UpdaterConfig, validate_profile_name,
+};
 
 /// On-disk shape of `config.toml`, supporting both the current profile-based
 /// format and the legacy single-instance `[graylog]` format.
@@ -52,6 +54,17 @@ fn parse_config_file(contents: &str) -> Result<Config, ConfigError> {
             .then(|| DEFAULT_PROFILE_NAME.to_string())
             .or_else(|| profiles.keys().next().cloned())
     });
+
+    // Profile names end up in cache file names, so reject hand-edited keys
+    // that could not have been created through the CLI (e.g. path
+    // separators) instead of letting them reach the filesystem.
+    for name in profiles.keys() {
+        if let Err(message) = validate_profile_name(name) {
+            return Err(ConfigError::InvalidFormat(format!(
+                "invalid profile name `{name}`: {message}"
+            )));
+        }
+    }
 
     Ok(Config {
         profiles,
@@ -337,5 +350,18 @@ mod tests {
         let error = parse_config_file(contents).expect_err("malformed config should fail");
 
         assert!(error.to_string().contains("failed to parse config"));
+    }
+
+    #[test]
+    fn profile_key_with_path_separators_is_rejected() {
+        let contents = r#"
+            [profiles."../evil"]
+            url = "https://graylog.example.com"
+            token = "token"
+        "#;
+
+        let error = parse_config_file(contents).expect_err("unsafe profile key should fail");
+
+        assert!(error.to_string().contains("invalid profile name `../evil`"));
     }
 }
