@@ -1,6 +1,6 @@
 [package]
 name = "graylog-cli"
-version = "0.0.5"
+version = "0.1.1"
 edition = "2024"
 publish = false
 
