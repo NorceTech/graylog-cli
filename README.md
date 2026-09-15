@@ -191,16 +191,55 @@ Or opt out for a single invocation with `GRAYLOG_CLI_AUTO_UPDATE=0` (the env var
 
 ## Configuration
 
-Credentials are written to a `config.toml` file in the platform config directory on first `auth`. Additional settings can be added manually:
+Credentials are written to a `config.toml` file in the platform config directory on first `auth`. The file stores one or more named profiles and marks one of them active:
 
 ```toml
-[graylog]
+active_profile = "prod"
+
+[profiles.prod]
 url = "https://graylog.example.com"
 token = "your-access-token"
 timeout_seconds = 60       # default: 60
 verify_tls = true          # default: true
 fields_cache_ttl_seconds = 300  # default: 300
 
+[profiles.staging]
+url = "https://staging.graylog.example.com"
+token = "staging-access-token"
+
 [updater]
 disable_auto_update = false  # default: false
 ```
+
+### Profiles
+
+A profile is a complete set of Graylog credentials. `graylog-cli auth` writes the profile selected with the global `--profile` flag (default: `default`) and makes it the active profile:
+
+```sh
+graylog-cli auth --url https://graylog.example.com --token TOKEN          # writes profile "default"
+graylog-cli --profile staging auth --url https://staging.example.com --token TOKEN
+```
+
+Every command runs against the active profile. Use `--profile` (or the `GRAYLOG_PROFILE` environment variable) to target another profile for a single invocation without switching:
+
+```sh
+graylog-cli --profile staging search 'level:ERROR'
+GRAYLOG_PROFILE=staging graylog-cli ping
+```
+
+Profile management commands:
+
+```sh
+graylog-cli profiles list            # list profiles (tokens are never shown)
+graylog-cli profiles show [name]     # show a profile; defaults to the active one
+graylog-cli profiles use staging     # switch the active profile
+graylog-cli profiles delete staging  # remove a profile
+```
+
+Deleting the active profile clears the active selection; the CLI then falls back to the first remaining profile. Deleting the last profile returns the CLI to its not-configured state. Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`.
+
+The fields cache is scoped per profile (`fields-<profile>` cache files), so switching profiles never serves stale field lists from another instance.
+
+### Legacy configuration
+
+Configurations written by older versions with a single `[graylog]` table keep working: they are migrated in memory to a `default` profile on load and the file is rewritten in the new format only on the next save (for example the next `auth`). No re-authentication is required.
