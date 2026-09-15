@@ -21,14 +21,13 @@ Use this skill to prepare and publish a `graylog-cli` release. Releases are trig
 
 ## Version Sources
 
-The release version is duplicated and must be updated in both places:
+The release version lives in one place:
 
 | File         | Field                             |
 | ------------ | --------------------------------- |
 | `Cargo.toml` | `[package] version = "<version>"` |
-| `flake.nix`  | `version = "<version>";`          |
 
-The git tag must be `v<version>`, for example `v0.1.0`.
+`flake.nix` derives its version from `Cargo.toml` (`builtins.fromTOML`), so it needs no manual sync. `.github/workflows/release.yml` additionally patches the version from the tag at build time as a safeguard, but the repo file is the source of truth — keep it accurate so local builds report the real version. The git tag must be `v<version>`, for example `v0.1.0`.
 
 ## Workflow
 
@@ -70,16 +69,11 @@ For prerelease tags such as `v0.0.2-alpha`, decide explicitly whether the next r
 
 ### 3. Update Versions
 
-Update both files to the chosen version without the leading `v`:
+Update `Cargo.toml` to the chosen version without the leading `v`:
 
 ```toml
 # Cargo.toml
 version = "<version>"
-```
-
-```nix
-# flake.nix
-version = "<version>";
 ```
 
 Regenerate the lock file so the package metadata matches `Cargo.toml`:
@@ -88,12 +82,11 @@ Regenerate the lock file so the package metadata matches `Cargo.toml`:
 cargo generate-lockfile
 ```
 
-Verify all version sources match:
+Verify the version source matches the intended release:
 
 ```bash
 cargo_version=$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)
-flake_version=$(grep -m1 'version = ' flake.nix | cut -d '"' -f2)
-test "$cargo_version" = "$flake_version"
+test "$cargo_version" = "<version>"
 test "v$cargo_version" = "v<version>"
 ```
 
@@ -118,13 +111,13 @@ Do not continue if any build fails.
 Review the diff:
 
 ```bash
-git diff -- Cargo.toml Cargo.lock flake.nix
+git diff -- Cargo.toml Cargo.lock
 ```
 
 Commit only the release version changes:
 
 ```bash
-git add Cargo.toml Cargo.lock flake.nix
+git add Cargo.toml Cargo.lock
 git commit -m "chore: bump version to <version>"
 ```
 
@@ -184,7 +177,7 @@ Expected workflow behavior:
 
 **Versions do not match**
 
-Update `Cargo.toml` and `flake.nix` to the same version, then run `cargo generate-lockfile` again.
+Update `Cargo.toml` to the intended version, then run `cargo generate-lockfile` again. (`flake.nix` reads its version from `Cargo.toml`, so it follows automatically.)
 
 **Nix build fails after Cargo version bump**
 
