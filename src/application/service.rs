@@ -220,6 +220,67 @@ impl ApplicationService {
         })
     }
 
+    /// Renames a profile, keeping its settings. Follows the active selection:
+    /// if the renamed profile was active, the new name becomes active.
+    pub async fn profiles_rename(
+        &self,
+        old_name: &str,
+        new_name: &str,
+    ) -> exn::Result<ProfileStatus, CliError> {
+        if let Err(message) = validate_profile_name(old_name) {
+            return Err(CliError::Validation(ValidationError::InvalidValue {
+                field: "profile",
+                message,
+            })
+            .into());
+        }
+        if let Err(message) = validate_profile_name(new_name) {
+            return Err(CliError::Validation(ValidationError::InvalidValue {
+                field: "profile",
+                message,
+            })
+            .into());
+        }
+
+        let mut config = self.load_config().await?;
+        let graylog = self.require_profile(&config, old_name)?;
+        if config.profiles.contains_key(new_name) {
+            let available = config
+                .profiles
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(CliError::Validation(ValidationError::InvalidValue {
+                field: "profile",
+                message: format!(
+                    "profile `{new_name}` already exists (available profiles: {available})"
+                ),
+            })
+            .into());
+        }
+
+        config.profiles.remove(old_name);
+        config
+            .profiles
+            .insert(new_name.to_string(), graylog.clone());
+        if config.active_profile.as_deref() == Some(old_name) {
+            config.active_profile = Some(new_name.to_string());
+        }
+        let active = self.effective_active_profile(&config);
+
+        self.config_store
+            .save(config)
+            .await
+            .or_raise(|| CliError::Config("failed to persist config".to_string()))?;
+
+        Ok(ProfileStatus {
+            ok: true,
+            command: "profiles.rename",
+            profile: profile_summary(new_name, &graylog, active.as_deref()),
+        })
+    }
+
     pub async fn search(
         &self,
         input: SearchCommandInput,
@@ -2606,6 +2667,67 @@ mod tests {
             .profiles_delete("no spaces")
             .await
             .expect_err("invalid profile name should fail");
+        assert_profile_validation_error(error, "profile names must");
+    }
+
+    #[tokio::test]
+    async fn profiles_rename_moves_settings_and_keeps_active() {
+        let config_store = FakeConfigStore::new(multi_profile_config());
+        let (service, _, _) = service_with_gateway(
+            config_store.clone(),
+            FakeCacheStore::default(),
+            FakeGraylogGateway::new(),
+        );
+        let status = service
+            .profiles_rename("beta", "gamma")
+            .await
+            .expect("profiles rename should succeed");
+        assert_eq!(status.command, "profiles.rename");
+        assert_eq!(status.profile.name, "gamma");
+        assert_eq!(status.profile.url, "http://beta:9000/");
+        let saved = config_store.saved_config().expect("config should be saved");
+        assert!(!saved.profiles.contains_key("beta"));
+        assert!(saved.profiles.contains_key("gamma"));
+        assert_eq!(saved.active_profile.as_deref(), Some("alpha"));
+    }
+
+    #[tokio::test]
+    async fn profiles_rename_follows_active_profile() {
+        let config_store = FakeConfigStore::new(multi_profile_config());
+        let (service, _, _) = service_with_gateway(
+            config_store.clone(),
+            FakeCacheStore::default(),
+            FakeGraylogGateway::new(),
+        );
+        service
+            .profiles_rename("alpha", "gamma")
+            .await
+            .expect("profiles rename should succeed");
+        let saved = config_store.saved_config().expect("config should be saved");
+        assert_eq!(saved.active_profile.as_deref(), Some("gamma"));
+    }
+
+    #[tokio::test]
+    async fn profiles_rename_rejects_unknown_and_existing_names() {
+        let (service, _, _) = service_with_gateway(
+            FakeConfigStore::new(multi_profile_config()),
+            FakeCacheStore::default(),
+            FakeGraylogGateway::new(),
+        );
+        let error = service
+            .profiles_rename("gamma", "delta")
+            .await
+            .expect_err("unknown source should fail");
+        assert_profile_validation_error(error, "unknown profile `gamma`");
+        let error = service
+            .profiles_rename("alpha", "beta")
+            .await
+            .expect_err("existing target should fail");
+        assert_profile_validation_error(error, "already exists");
+        let error = service
+            .profiles_rename("no spaces", "delta")
+            .await
+            .expect_err("invalid source should fail");
         assert_profile_validation_error(error, "profile names must");
     }
 

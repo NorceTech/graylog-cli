@@ -42,6 +42,37 @@ Config is stored at:
 
 On Unix, directory permissions are `0700` and file permissions are `0600`. On Windows, NTFS ACLs inherit from the parent directory — no explicit permission hardening is applied.
 
+## Profiles (Multiple Graylog Instances)
+
+Profiles live in the same `config.toml` file above. Each profile is a complete set of credentials under `[profiles.<name>]`, plus an `active_profile` pointer naming the default:
+
+```toml
+active_profile = "prod"
+
+[profiles.prod]
+url = "https://graylog.example.com"
+token = "your-access-token"
+
+[profiles.staging]
+url = "https://staging.graylog.example.com"
+token = "staging-access-token"
+```
+
+Per-profile cache files (`fields-<profile>.json`) sit next to `config.toml`, so switching profiles never serves stale field lists from another instance. A legacy single-credential file (`[graylog]` table, no profiles) migrates automatically on first load into `profiles.default` without re-auth.
+
+```bash
+graylog-cli auth --url <URL> --token <TOKEN>              # writes profile "default"
+graylog-cli --profile staging auth --url <URL> --token <TOKEN>  # writes profile "staging"
+
+graylog-cli profiles list              # list profiles (tokens are never shown)
+graylog-cli profiles show [name]       # show a profile; defaults to the active one
+graylog-cli profiles use staging       # switch the active profile
+graylog-cli profiles rename old new    # rename a profile (follows the active selection)
+graylog-cli profiles delete staging    # remove a profile
+```
+
+Every command runs against the active profile. Use the global `--profile` flag (or `GRAYLOG_PROFILE` env var) to target another profile for one invocation without switching: `graylog-cli --profile staging search 'level:ERROR'`. `ping` reports which profile it used (`profile`) and which are available (`available_profiles`). Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`.
+
 ## Graylog Query Language
 
 The `search`, `aggregate`, and `streams search` commands accept Graylog's Lucene-based query syntax. Understanding the query language is essential for effective use.
@@ -218,6 +249,20 @@ Check that Graylog is reachable and credentials are valid.
 
 ```bash
 graylog-cli ping
+```
+
+The response includes `profile` (which profile was used) and `available_profiles` (all configured profiles). See [Profiles](#profiles-multiple-graylog-instances).
+
+### profiles
+
+Manage named Graylog instance profiles. Tokens are never shown in output.
+
+```bash
+graylog-cli profiles list
+graylog-cli profiles show [name]
+graylog-cli profiles use <name>
+graylog-cli profiles rename <old> <new>
+graylog-cli profiles delete <name>
 ```
 
 ## Investigation Workflows

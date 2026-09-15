@@ -232,8 +232,9 @@ Profile management commands:
 ```sh
 graylog-cli profiles list            # list profiles (tokens are never shown)
 graylog-cli profiles show [name]     # show a profile; defaults to the active one
-graylog-cli profiles use staging     # switch the active profile
-graylog-cli profiles delete staging  # remove a profile
+graylog-cli profiles use staging          # switch the active profile
+graylog-cli profiles rename staging prod  # rename a profile
+graylog-cli profiles delete staging       # remove a profile
 ```
 
 Deleting the active profile clears the active selection; the CLI then falls back to the first remaining profile. Deleting the last profile returns the CLI to its not-configured state. Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`.

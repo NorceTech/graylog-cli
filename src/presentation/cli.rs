@@ -343,6 +343,8 @@ pub enum ProfilesCommands {
     Show(ProfileShowArgs),
     /// Delete a profile.
     Delete(ProfileNameArgs),
+    /// Rename a profile (keeps its settings; follows the active selection).
+    Rename(ProfileRenameArgs),
 }
 
 #[derive(Debug, Args)]
@@ -350,6 +352,16 @@ pub struct ProfileNameArgs {
     /// Profile name.
     #[arg(value_parser = parse_profile_value)]
     pub name: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileRenameArgs {
+    /// Current profile name.
+    #[arg(value_parser = parse_profile_value)]
+    pub old_name: String,
+    /// New profile name.
+    #[arg(value_parser = parse_profile_value)]
+    pub new_name: String,
 }
 
 #[derive(Debug, Args)]
@@ -1011,6 +1023,32 @@ mod tests {
             },
             _ => panic!("expected Profiles command"),
         }
+    }
+
+    #[test]
+    fn profiles_rename_requires_two_valid_names() {
+        let cli = parse(&["graylog-cli", "profiles", "rename", "staging", "prod"])
+            .expect("profiles rename should parse");
+
+        match cli.command {
+            Commands::Profiles { command } => match command {
+                ProfilesCommands::Rename(args) => {
+                    assert_eq!(args.old_name, "staging");
+                    assert_eq!(args.new_name, "prod");
+                }
+                _ => panic!("expected Rename subcommand"),
+            },
+            _ => panic!("expected Profiles command"),
+        }
+
+        assert!(
+            parse(&["graylog-cli", "profiles", "rename", "not valid", "prod"]).is_err(),
+            "profiles rename with invalid old name should fail"
+        );
+        assert!(
+            parse(&["graylog-cli", "profiles", "rename", "staging"]).is_err(),
+            "profiles rename without new name should fail"
+        );
     }
 
     #[test]

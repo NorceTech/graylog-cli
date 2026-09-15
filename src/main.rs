@@ -184,6 +184,13 @@ async fn run(
             ProfilesCommands::Delete(args) => {
                 emit_json_success(&service.profiles_delete(&args.name).await?);
             }
+            ProfilesCommands::Rename(args) => {
+                emit_json_success(
+                    &service
+                        .profiles_rename(&args.old_name, &args.new_name)
+                        .await?,
+                );
+            }
         },
         Commands::Fields(FieldsArgs { refresh }) => {
             emit_json_success(&service.fields(refresh).await?);
