@@ -48,12 +48,13 @@
 
           windowsTarget = "x86_64-pc-windows-gnu";
 
-          # One toolchain for every build and dev shell: the complete stable
-          # profile (rustc, cargo, clippy, rustfmt, rust-src) plus the Windows
-          # std so the cross build reuses the exact same compiler.
-          toolchain = pkgs.fenix.combine [
-            pkgs.fenix.stable.completeToolchain
-            pkgs.fenix.targets.${windowsTarget}.stable.rust-std
+          # One toolchain everywhere, like the example: fenix nightly
+          # `complete.toolchain` (rustc, cargo, clippy, rustfmt, rust-src)
+          # plus the Windows std so the cross build reuses the exact same
+          # compiler. Every build and both dev shells share this.
+          toolchain = inputs.fenix.packages.${system}.combine [
+            inputs.fenix.packages.${system}.complete.toolchain
+            inputs.fenix.packages.${system}.targets.${windowsTarget}.latest.rust-std
           ];
 
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain toolchain;
@@ -126,12 +127,12 @@
           devShells = {
             default = pkgs.mkShell {
               inherit (config.pre-commit) shellHook;
-              # rust-analyzer ships inside the complete toolchain above.
               packages = [
                 toolchain
                 pkgs.bacon
                 pkgs.cargo-deny
                 pkgs.cargo-edit
+                pkgs.cargo-udeps
               ]
               ++ config.pre-commit.settings.enabledPackages;
               env = {
