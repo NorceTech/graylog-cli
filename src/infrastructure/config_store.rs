@@ -1,14 +1,77 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 use async_trait::async_trait;
+use serde::Deserialize;
 use tokio::task;
 
 use crate::application::ports::cache_store::{CacheError, CacheStore};
 use crate::application::ports::config_store::{ConfigError, ConfigStore};
-use crate::domain::config::Config;
+use crate::domain::config::{
+    Config, DEFAULT_PROFILE_NAME, GraylogConfig, UpdaterConfig, validate_profile_name,
+};
+
+/// On-disk shape of `config.toml`, supporting both the current profile-based
+/// format and the legacy single-instance `[graylog]` format.
+///
+/// This type is private to the infrastructure layer: legacy files are migrated
+/// in memory while loading, and `ConfigStore::save` only ever writes the new
+/// format. Loading a legacy file never rewrites it.
+#[derive(Debug, Deserialize)]
+struct RawConfigFile {
+    #[serde(default)]
+    graylog: Option<GraylogConfig>,
+    #[serde(default)]
+    profiles: BTreeMap<String, GraylogConfig>,
+    #[serde(default)]
+    active_profile: Option<String>,
+    #[serde(default)]
+    updater: UpdaterConfig,
+}
+
+/// Parses raw file contents into a domain `Config`, migrating a legacy
+/// `[graylog]` table into `profiles.default` and selecting an active profile
+/// when the file does not name one.
+fn parse_config_file(contents: &str) -> Result<Config, ConfigError> {
+    let raw: RawConfigFile = toml::from_str(contents)
+        .map_err(|error| ConfigError::InvalidFormat(format!("failed to parse config: {error}")))?;
+
+    let mut profiles = raw.profiles;
+    if let Some(legacy) = raw.graylog {
+        if !profiles.contains_key(DEFAULT_PROFILE_NAME) {
+            profiles.insert(DEFAULT_PROFILE_NAME.to_string(), legacy);
+        } else {
+            tracing::warn!("legacy [graylog] table ignored: profiles.default already exists");
+        }
+    }
+
+    let active_profile = raw.active_profile.or_else(|| {
+        profiles
+            .contains_key(DEFAULT_PROFILE_NAME)
+            .then(|| DEFAULT_PROFILE_NAME.to_string())
+            .or_else(|| profiles.keys().next().cloned())
+    });
+
+    // Profile names end up in cache file names, so reject hand-edited keys
+    // that could not have been created through the CLI (e.g. path
+    // separators) instead of letting them reach the filesystem.
+    for name in profiles.keys() {
+        if let Err(message) = validate_profile_name(name) {
+            return Err(ConfigError::InvalidFormat(format!(
+                "invalid profile name `{name}`: {message}"
+            )));
+        }
+    }
+
+    Ok(Config {
+        profiles,
+        active_profile,
+        updater: raw.updater,
+    })
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FileConfigStore;
@@ -51,9 +114,7 @@ impl ConfigStore for FileConfigStore {
                 ConfigError::OperationFailure(format!("failed to read config: {error}"))
             })?;
 
-            toml::from_str::<Config>(&contents).map_err(|error| {
-                ConfigError::InvalidFormat(format!("failed to parse config: {error}"))
-            })
+            parse_config_file(&contents)
         })
         .await
         .map_err(|error| {
@@ -118,6 +179,19 @@ impl CacheStore for FileConfigStore {
         .map_err(|error| CacheError::StoreUnavailable(format!("failed to write cache: {error}")))?
         .map_err(Into::into)
     }
+
+    async fn remove_serialized(&self, key: &str) -> exn::Result<(), CacheError> {
+        let cache_path = Self::cache_path_for_key(key)?;
+
+        task::spawn_blocking(move || match std::fs::remove_file(&cache_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(CacheError::OperationFailure(error.to_string())),
+        })
+        .await
+        .map_err(|error| CacheError::StoreUnavailable(format!("failed to clear cache: {error}")))?
+        .map_err(Into::into)
+    }
 }
 
 fn write_config_atomically(config_path: &Path, serialized: &str) -> Result<(), ConfigError> {
@@ -159,4 +233,135 @@ fn set_directory_permissions(config_dir: &Path) -> Result<(), ConfigError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_config_file;
+    use crate::domain::config::DEFAULT_PROFILE_NAME;
+
+    #[test]
+    fn legacy_graylog_table_migrates_into_default_profile() {
+        let contents = r#"
+            [graylog]
+            url = "https://graylog.example.com"
+            token = "legacy-token"
+            timeout_seconds = 42
+        "#;
+
+        let config = parse_config_file(contents).expect("legacy config should parse");
+
+        assert_eq!(config.profiles.len(), 1);
+        let profile = &config.profiles[DEFAULT_PROFILE_NAME];
+        assert_eq!(profile.url.as_str(), "https://graylog.example.com/");
+        assert_eq!(profile.timeout_seconds, 42);
+        assert_eq!(config.active_profile.as_deref(), Some(DEFAULT_PROFILE_NAME));
+    }
+
+    #[test]
+    fn legacy_graylog_preserves_updater_settings() {
+        let contents = r#"
+            [graylog]
+            url = "https://graylog.example.com"
+            token = "legacy-token"
+
+            [updater]
+            disable_auto_update = true
+        "#;
+
+        let config = parse_config_file(contents).expect("legacy config should parse");
+
+        assert!(config.updater.disable_auto_update);
+    }
+
+    #[test]
+    fn profile_format_passes_through_unchanged() {
+        let contents = r#"
+            active_profile = "prod"
+
+            [profiles.prod]
+            url = "https://prod.example.com"
+            token = "prod-token"
+
+            [profiles.staging]
+            url = "https://staging.example.com"
+            token = "staging-token"
+        "#;
+
+        let config = parse_config_file(contents).expect("profile config should parse");
+
+        assert_eq!(config.profiles.len(), 2);
+        assert_eq!(config.active_profile.as_deref(), Some("prod"));
+        assert!(config.profiles.contains_key("staging"));
+    }
+
+    #[test]
+    fn profile_format_without_active_profile_selects_default_then_first() {
+        let contents = r#"
+            [profiles.beta]
+            url = "https://beta.example.com"
+            token = "beta-token"
+
+            [profiles.default]
+            url = "https://graylog.example.com"
+            token = "default-token"
+        "#;
+
+        let config = parse_config_file(contents).expect("profile config should parse");
+
+        assert_eq!(config.active_profile.as_deref(), Some(DEFAULT_PROFILE_NAME));
+    }
+
+    #[test]
+    fn migration_keeps_existing_default_profile_over_legacy_graylog() {
+        let contents = r#"
+            [graylog]
+            url = "https://legacy.example.com"
+            token = "legacy-token"
+
+            [profiles.default]
+            url = "https://current.example.com"
+            token = "current-token"
+        "#;
+
+        let config = parse_config_file(contents).expect("mixed config should parse");
+
+        assert_eq!(config.profiles.len(), 1);
+        assert_eq!(
+            config.profiles[DEFAULT_PROFILE_NAME].url.as_str(),
+            "https://current.example.com/"
+        );
+    }
+
+    #[test]
+    fn empty_profiles_migrate_to_not_configured_state() {
+        let contents = "";
+
+        let config = parse_config_file(contents).expect("empty config should parse");
+
+        assert!(config.profiles.is_empty());
+        assert_eq!(config.active_profile, None);
+    }
+
+    #[test]
+    fn malformed_config_is_rejected() {
+        let contents = "not [ valid toml";
+
+        let error = parse_config_file(contents).expect_err("malformed config should fail");
+
+        assert!(error.to_string().contains("failed to parse config"));
+    }
+
+    #[test]
+    fn profile_key_with_path_separators_is_rejected() {
+        let contents = r#"
+            [profiles."../evil"]
+            url = "https://graylog.example.com"
+            token = "token"
+        "#;
+
+        let error = parse_config_file(contents).expect_err("unsafe profile key should fail");
+
+        assert!(error.to_string().contains("invalid profile name `../evil`"));
+    }
 }

@@ -170,6 +170,8 @@ pub struct PingStatus {
     pub command: &'static str,
     pub reachable: bool,
     pub graylog_url: String,
+    pub profile: String,
+    pub available_profiles: Vec<String>,
 }
 
 impl AggregationType {
@@ -244,16 +246,55 @@ pub struct AuthStatus {
     pub ok: bool,
     pub command: &'static str,
     pub graylog_url: String,
+    pub profile: String,
 }
 
 impl AuthStatus {
-    pub fn ok(graylog_url: String) -> Self {
+    pub fn ok(graylog_url: String, profile: String) -> Self {
         Self {
             ok: true,
             command: "auth",
             graylog_url,
+            profile,
         }
     }
+}
+
+/// Token-free view of a stored Graylog profile, safe to serialize to stdout.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProfileSummary {
+    pub name: String,
+    pub url: String,
+    pub timeout_seconds: u64,
+    pub verify_tls: bool,
+    pub fields_cache_ttl_seconds: u64,
+    /// Effective for this invocation: profile override first, then persisted active_profile.
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfilesStatus {
+    pub ok: bool,
+    pub command: &'static str,
+    pub active_profile: Option<String>,
+    pub profiles: Vec<ProfileSummary>,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileStatus {
+    pub ok: bool,
+    pub command: &'static str,
+    pub profile: ProfileSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileDeleteStatus {
+    pub ok: bool,
+    pub command: &'static str,
+    pub profile: String,
+    pub active_profile: Option<String>,
+    pub remaining_profiles: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

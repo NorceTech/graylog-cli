@@ -34,13 +34,45 @@ graylog-cli auth --url <URL> --token <TOKEN>
 
 Config is stored at:
 
-| Condition                | Path                                       |
-| ------------------------ | ------------------------------------------ |
-| `XDG_CONFIG_HOME` is set | `$XDG_CONFIG_HOME/graylog-cli/config.toml` |
-| Unix default             | `$HOME/.config/graylog-cli/config.toml`    |
-| Windows default          | `%APPDATA%\graylog-cli\config.toml`        |
+| Condition                        | Path                                                    |
+| -------------------------------- | ------------------------------------------------------- |
+| `XDG_CONFIG_HOME` is set (Linux) | `$XDG_CONFIG_HOME/graylog-cli/config.toml`              |
+| macOS default                    | `~/Library/Application Support/graylog-cli/config.toml` |
+| Linux default                    | `$HOME/.config/graylog-cli/config.toml`                 |
+| Windows default                  | `%APPDATA%\graylog-cli\config.toml`                     |
 
 On Unix, directory permissions are `0700` and file permissions are `0600`. On Windows, NTFS ACLs inherit from the parent directory — no explicit permission hardening is applied.
+
+## Profiles (Multiple Graylog Instances)
+
+Profiles live in the same `config.toml` file above. Each profile is a complete set of credentials under `[profiles.<name>]`, plus an `active_profile` pointer naming the default:
+
+```toml
+active_profile = "prod"
+
+[profiles.prod]
+url = "https://graylog.example.com"
+token = "your-access-token"
+
+[profiles.staging]
+url = "https://staging.graylog.example.com"
+token = "staging-access-token"
+```
+
+Per-profile cache files (`fields-<profile>.json`) sit next to `config.toml`, so switching profiles never serves stale field lists from another instance. A legacy single-credential file (`[graylog]` table, no profiles) migrates automatically on first load into `profiles.default` without re-auth.
+
+```bash
+graylog-cli auth --url <URL> --token <TOKEN>              # writes profile "default"
+graylog-cli --profile staging auth --url <URL> --token <TOKEN>  # writes profile "staging"
+
+graylog-cli profiles list              # list profiles (tokens are never shown)
+graylog-cli profiles show [name]       # show a profile; defaults to the active one
+graylog-cli profiles use staging       # switch the active profile
+graylog-cli profiles rename old new    # rename a profile (follows the active selection)
+graylog-cli profiles delete staging    # remove a profile
+```
+
+Every command runs against the active profile. Use the global `--profile` flag (or `GRAYLOG_PROFILE` env var) to target another profile for one invocation without switching: `graylog-cli --profile staging search 'level:ERROR'`. `ping` reports which profile it used (`profile`) and which are available (`available_profiles`). Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`. Names that differ only by case from an existing profile are rejected.
 
 ## Graylog Query Language
 
@@ -98,21 +130,21 @@ graylog-cli search <QUERY> [--time-range 15m] [--since 1h] [--field message] [--
   [--group-by <FIELD>] [--all-pages] [--all-fields] [--format json|table]
 ```
 
-| Flag               | Values                        | Notes                                                                                                                                                   |
-| ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--time-range`     | `Ns`, `Nm`, `Nh`, `Nd`, `Nw`  | Relative range. Mutually exclusive with `--from`/`--to` and `--since`                                                                                  |
-| `--from` / `--to`  | ISO 8601 timestamps           | Absolute range. Both required together. `--from` must be earlier than `--to`                                                                            |
-| `--since`          | humantime duration            | Shorthand absolute range ending now: `--since 1h` expands to `--from <now-1h> --to <now>`. Mutually exclusive with `--time-range` and `--from`/`--to`  |
-| `--field`          | repeatable                    | Restrict returned fields                                                                                                                                |
-| `--all-fields`     | flag (no value)               | Fetch all indexed fields (cached on disk with TTL). Ignored when `--field` is set                                                                      |
-| `--limit`          | 1-1000                        | Per-page limit (ignored when `--all-pages` is set)                                                                                                     |
-| `--offset`         | non-negative integer          | Pagination offset (ignored when `--all-pages` is set)                                                                                                  |
-| `--sort`           | field name                    | Default: `timestamp`                                                                                                                                    |
-| `--sort-direction` | `asc`, `desc`                 | Default: `desc`                                                                                                                                         |
-| `--stream-id`      | repeatable                    | Scope search to specific streams                                                                                                                        |
-| `--group-by`       | any indexed field name        | Group results by a field. Adds `grouped_by` and `groups` to output                                                                                     |
-| `--all-pages`      | flag (no value)               | Fetch all results beyond the 500-per-page API limit. See caveat below                                                                                  |
-| `--format`         | `json` (default), `table`     | Output format. `table` renders an ASCII table of messages directly to stdout                                                                            |
+| Flag               | Values                       | Notes                                                                                                                                                 |
+| ------------------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--time-range`     | `Ns`, `Nm`, `Nh`, `Nd`, `Nw` | Relative range. Mutually exclusive with `--from`/`--to` and `--since`                                                                                 |
+| `--from` / `--to`  | ISO 8601 timestamps          | Absolute range. Both required together. `--from` must be earlier than `--to`                                                                          |
+| `--since`          | humantime duration           | Shorthand absolute range ending now: `--since 1h` expands to `--from <now-1h> --to <now>`. Mutually exclusive with `--time-range` and `--from`/`--to` |
+| `--field`          | repeatable                   | Restrict returned fields                                                                                                                              |
+| `--all-fields`     | flag (no value)              | Fetch all indexed fields (cached on disk with TTL). Ignored when `--field` is set                                                                     |
+| `--limit`          | 1-1000                       | Per-page limit (ignored when `--all-pages` is set)                                                                                                    |
+| `--offset`         | non-negative integer         | Pagination offset (ignored when `--all-pages` is set)                                                                                                 |
+| `--sort`           | field name                   | Default: `timestamp`                                                                                                                                  |
+| `--sort-direction` | `asc`, `desc`                | Default: `desc`                                                                                                                                       |
+| `--stream-id`      | repeatable                   | Scope search to specific streams                                                                                                                      |
+| `--group-by`       | any indexed field name       | Group results by a field. Adds `grouped_by` and `groups` to output                                                                                    |
+| `--all-pages`      | flag (no value)              | Fetch all results beyond the 500-per-page API limit. See caveat below                                                                                 |
+| `--format`         | `json` (default), `table`    | Output format. `table` renders an ASCII table of messages directly to stdout                                                                          |
 
 When `--group-by` is set, the output includes a `groups` array where each group has `key` (field value), `count` (number of messages), and `duration_ms` (time span from first to last message in the group). Use `--sort-direction asc` with `--group-by` for chronological grouping. The `--group-by` field is automatically added to the fetched fields, so you do not need to specify it explicitly with `--field`.
 
@@ -206,8 +238,8 @@ graylog-cli fields [--refresh]
 
 Returns every field name that Graylog has indexed across all messages. Use this to discover what fields you can pass to `--field`, use in queries (`field:value`), or aggregate on.
 
-| Flag        | Notes                                                                                              |
-| ----------- | -------------------------------------------------------------------------------------------------- |
+| Flag        | Notes                                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------------- |
 | `--refresh` | Bypass the on-disk cache and fetch fresh fields from Graylog, then update the cache with the result |
 
 Without `--refresh`, results may be served from an on-disk cache to avoid a round-trip on every query. Use `--refresh` when newly indexed fields are not appearing in results.
@@ -218,6 +250,20 @@ Check that Graylog is reachable and credentials are valid.
 
 ```bash
 graylog-cli ping
+```
+
+The response includes `profile` (which profile was used) and `available_profiles` (all configured profiles). See [Profiles](#profiles-multiple-graylog-instances).
+
+### profiles
+
+Manage named Graylog instance profiles. Tokens are never shown in output.
+
+```bash
+graylog-cli profiles list
+graylog-cli profiles show [name]
+graylog-cli profiles use <name>
+graylog-cli profiles rename <old> <new>
+graylog-cli profiles delete <name>
 ```
 
 ## Investigation Workflows

@@ -2,7 +2,7 @@
 name: release
 description: Create a graylog-cli release by determining the next git tag, synchronizing Cargo.toml and flake.nix versions, verifying the Nix build, tagging, and pushing the release trigger.
 disable-model-invocation: true
-argument-hint: '[patch|minor|major|<version>]'
+argument-hint: "[patch|minor|major|<version>]"
 allowed-tools: Bash, Read, Edit, Write, Grep, Glob
 ---
 
@@ -23,10 +23,10 @@ Use this skill to prepare and publish a `graylog-cli` release. Releases are trig
 
 The release version is duplicated and must be updated in both places:
 
-| File | Field |
-| --- | --- |
+| File         | Field                             |
+| ------------ | --------------------------------- |
 | `Cargo.toml` | `[package] version = "<version>"` |
-| `flake.nix` | `version = "<version>";` |
+| `flake.nix`  | `version = "<version>";`          |
 
 The git tag must be `v<version>`, for example `v0.1.0`.
 

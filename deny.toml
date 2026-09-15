@@ -1,6 +1,9 @@
 [advisories]
 yanked = "deny"
-ignore = []
+# RUSTSEC-2026-0173: proc-macro-error2 is unmaintained. It arrives
+# transitively via tabled_derive (already at latest) and runs only at
+# compile time inside derive macros, so the exposure is accepted.
+ignore = ["RUSTSEC-2026-0173"]
 
 [bans]
 multiple-versions = "warn"

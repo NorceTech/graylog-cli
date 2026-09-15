@@ -4,6 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::domain::config::validate_profile_name;
 use crate::domain::error::{CliError, ValidationError};
 use crate::domain::models::{
     AggregateCommandInput, AggregationType, SearchCommandInput, SortDirection,
@@ -18,8 +19,23 @@ use crate::domain::timerange::{CommandTimerange, TimerangeInput};
 )]
 #[command(arg_required_else_help = true)]
 pub struct Cli {
+    /// Graylog profile to use for this invocation (default: the active profile).
+    #[arg(
+        long = "profile",
+        global = true,
+        env = "GRAYLOG_PROFILE",
+        value_parser = parse_profile_value,
+    )]
+    pub profile: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
+}
+
+fn parse_profile_value(value: &str) -> Result<String, String> {
+    validate_profile_name(value)
+        .map(|()| value.to_string())
+        .map_err(|message| format!("invalid value '{value}' for '--profile': {message}"))
 }
 
 impl Cli {
@@ -48,6 +64,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: SystemCommands,
     },
+    /// Manage named Graylog instance profiles.
+    Profiles {
+        #[command(subcommand)]
+        command: ProfilesCommands,
+    },
     /// Check that Graylog is reachable.
     Ping,
     /// List all indexed fields.
@@ -74,6 +95,7 @@ impl Commands {
             }
             Self::Streams { command } => command.validate(),
             Self::System { .. } => Ok(()),
+            Self::Profiles { .. } => Ok(()),
             Self::Fields(_) => Ok(()),
             Self::Upgrade | Self::SelfUpdateWorker => Ok(()),
         }
@@ -309,6 +331,44 @@ impl StreamIdTimerangeArgs {
 pub enum SystemCommands {
     /// Show Graylog system information.
     Info,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProfilesCommands {
+    /// List configured profiles (tokens are never shown).
+    List,
+    /// Make a profile the active one.
+    Use(ProfileNameArgs),
+    /// Show details for a profile (defaults to the active profile).
+    Show(ProfileShowArgs),
+    /// Delete a profile.
+    Delete(ProfileNameArgs),
+    /// Rename a profile (keeps its settings; follows the active selection).
+    Rename(ProfileRenameArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileNameArgs {
+    /// Profile name.
+    #[arg(value_parser = parse_profile_value)]
+    pub name: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileRenameArgs {
+    /// Current profile name.
+    #[arg(value_parser = parse_profile_value)]
+    pub old_name: String,
+    /// New profile name.
+    #[arg(value_parser = parse_profile_value)]
+    pub new_name: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ProfileShowArgs {
+    /// Profile name (defaults to the active profile).
+    #[arg(value_parser = parse_profile_value)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Args)]
@@ -847,6 +907,166 @@ mod tests {
         assert!(
             matches!(result, Some(CommandTimerange::Absolute(_))),
             "expected absolute timerange from --since"
+        );
+    }
+
+    // --- --profile tests ---
+
+    #[test]
+    fn global_profile_flag_parses_before_subcommand() {
+        let cli = parse(&["graylog-cli", "--profile", "prod", "ping"])
+            .expect("--profile before subcommand should parse");
+
+        assert_eq!(cli.profile.as_deref(), Some("prod"));
+        assert!(matches!(cli.command, Commands::Ping));
+    }
+
+    #[test]
+    fn global_profile_flag_parses_after_subcommand() {
+        let cli = parse(&["graylog-cli", "ping", "--profile", "prod"])
+            .expect("--profile after subcommand should parse");
+
+        assert_eq!(cli.profile.as_deref(), Some("prod"));
+    }
+
+    #[test]
+    fn profile_defaults_to_none() {
+        let cli = parse(&["graylog-cli", "ping"]).expect("ping should parse");
+
+        assert_eq!(cli.profile, None);
+    }
+
+    #[test]
+    fn invalid_profile_names_are_rejected() {
+        for value in ["", "-lead", ".dot", "with space", "pro/file"] {
+            assert!(
+                parse(&["graylog-cli", "--profile", value, "ping"]).is_err(),
+                "profile `{value}` should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_accepts_global_profile_flag() {
+        let result = parse(&[
+            "graylog-cli",
+            "auth",
+            "--url",
+            "http://localhost:9000",
+            "--token",
+            "secret",
+            "--profile",
+            "prod",
+        ]);
+        // clap routes the global flag to the root, so parsing succeeds and the
+        // value lands on `cli.profile` rather than on AuthArgs.
+        let cli = result.expect("--profile is a global flag even after auth");
+        assert_eq!(cli.profile.as_deref(), Some("prod"));
+    }
+
+    // --- Profiles subcommand tests ---
+
+    #[test]
+    fn profiles_list_parses() {
+        let cli = parse(&["graylog-cli", "profiles", "list"]).expect("profiles list should parse");
+
+        match cli.command {
+            Commands::Profiles { command } => {
+                assert!(matches!(command, ProfilesCommands::List));
+            }
+            _ => panic!("expected Profiles command"),
+        }
+    }
+
+    #[test]
+    fn profiles_use_requires_valid_name() {
+        let cli =
+            parse(&["graylog-cli", "profiles", "use", "prod"]).expect("profiles use should parse");
+
+        match cli.command {
+            Commands::Profiles { command } => match command {
+                ProfilesCommands::Use(args) => assert_eq!(args.name, "prod"),
+                _ => panic!("expected Use subcommand"),
+            },
+            _ => panic!("expected Profiles command"),
+        }
+
+        assert!(
+            parse(&["graylog-cli", "profiles", "use", "not valid"]).is_err(),
+            "profiles use with invalid name should fail"
+        );
+        assert!(
+            parse(&["graylog-cli", "profiles", "use"]).is_err(),
+            "profiles use without name should fail"
+        );
+    }
+
+    #[test]
+    fn profiles_show_name_is_optional() {
+        let cli = parse(&["graylog-cli", "profiles", "show"])
+            .expect("profiles show without name should parse");
+
+        match cli.command {
+            Commands::Profiles { command } => match command {
+                ProfilesCommands::Show(args) => assert_eq!(args.name, None),
+                _ => panic!("expected Show subcommand"),
+            },
+            _ => panic!("expected Profiles command"),
+        }
+
+        let cli = parse(&["graylog-cli", "profiles", "show", "prod"])
+            .expect("profiles show with name should parse");
+        match cli.command {
+            Commands::Profiles { command } => match command {
+                ProfilesCommands::Show(args) => assert_eq!(args.name.as_deref(), Some("prod")),
+                _ => panic!("expected Show subcommand"),
+            },
+            _ => panic!("expected Profiles command"),
+        }
+    }
+
+    #[test]
+    fn profiles_rename_requires_two_valid_names() {
+        let cli = parse(&["graylog-cli", "profiles", "rename", "staging", "prod"])
+            .expect("profiles rename should parse");
+
+        match cli.command {
+            Commands::Profiles { command } => match command {
+                ProfilesCommands::Rename(args) => {
+                    assert_eq!(args.old_name, "staging");
+                    assert_eq!(args.new_name, "prod");
+                }
+                _ => panic!("expected Rename subcommand"),
+            },
+            _ => panic!("expected Profiles command"),
+        }
+
+        assert!(
+            parse(&["graylog-cli", "profiles", "rename", "not valid", "prod"]).is_err(),
+            "profiles rename with invalid old name should fail"
+        );
+        assert!(
+            parse(&["graylog-cli", "profiles", "rename", "staging"]).is_err(),
+            "profiles rename without new name should fail"
+        );
+    }
+
+    #[test]
+    fn profiles_delete_requires_name() {
+        let cli = parse(&["graylog-cli", "profiles", "delete", "prod"])
+            .expect("profiles delete should parse");
+
+        match cli.command {
+            Commands::Profiles { command } => match command {
+                ProfilesCommands::Delete(args) => assert_eq!(args.name, "prod"),
+                _ => panic!("expected Delete subcommand"),
+            },
+            _ => panic!("expected Profiles command"),
+        }
+
+        assert!(
+            parse(&["graylog-cli", "profiles", "delete"]).is_err(),
+            "profiles delete without name should fail"
         );
     }
 }

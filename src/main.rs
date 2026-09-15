@@ -15,7 +15,7 @@ use graylog_cli::infrastructure::config_store::FileConfigStore;
 use graylog_cli::infrastructure::graylog_client::ReqwestGraylogGatewayFactory;
 use graylog_cli::infrastructure::updater::GitHubUpdaterGateway;
 use graylog_cli::presentation::cli::{
-    Cli, Commands, FieldsArgs, OutputFormat, StreamsCommands, SystemCommands,
+    Cli, Commands, FieldsArgs, OutputFormat, ProfilesCommands, StreamsCommands, SystemCommands,
 };
 use graylog_cli::presentation::output::{
     ErrorEnvelope, exit_code_for_cli_error, print_error_json, print_json, print_table,
@@ -49,7 +49,8 @@ async fn main() {
         config_store.clone(),
         Arc::new(ReqwestGraylogGatewayFactory),
         config_store.clone(),
-    );
+    )
+    .with_profile_override(cli.profile.clone());
 
     let updater = build_updater_service(config_store.clone());
 
@@ -168,6 +169,27 @@ async fn run(
         } => match system_command {
             SystemCommands::Info => {
                 emit_json_success(&service.system_info().await?);
+            }
+        },
+        Commands::Profiles { command } => match command {
+            ProfilesCommands::List => {
+                emit_json_success(&service.profiles_list().await?);
+            }
+            ProfilesCommands::Use(args) => {
+                emit_json_success(&service.profiles_use(&args.name).await?);
+            }
+            ProfilesCommands::Show(args) => {
+                emit_json_success(&service.profiles_show(args.name.as_deref()).await?);
+            }
+            ProfilesCommands::Delete(args) => {
+                emit_json_success(&service.profiles_delete(&args.name).await?);
+            }
+            ProfilesCommands::Rename(args) => {
+                emit_json_success(
+                    &service
+                        .profiles_rename(&args.old_name, &args.new_name)
+                        .await?,
+                );
             }
         },
         Commands::Fields(FieldsArgs { refresh }) => {
