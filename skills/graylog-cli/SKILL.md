@@ -74,6 +74,8 @@ graylog-cli profiles delete staging    # remove a profile
 
 Every command runs against the active profile. Use the global `--profile` flag (or `GRAYLOG_PROFILE` env var) to target another profile for one invocation without switching: `graylog-cli --profile staging search 'level:ERROR'`. `ping` reports which profile it used (`profile`) and which are available (`available_profiles`). Profile names must start with an ASCII letter or digit and may only contain ASCII letters, digits, `.`, `_`, and `-`. Names that differ only by case from an existing profile are rejected.
 
+**Confirm the instance before trusting an empty or odd result.** A profile name is only a label. Run `graylog-cli ping` (or `profiles list`) and check that `graylog_url` is the Graylog that receives logs for the system you are investigating. If two profiles return identical results, they point at the same URL. When the URL is wrong, retry with `--profile <name>`, or ask the user which instance to use. Don't report "no logs" until you have done this.
+
 ## Graylog Query Language
 
 The `search`, `aggregate`, and `streams search` commands accept Graylog's Lucene-based query syntax. Understanding the query language is essential for effective use.
@@ -146,7 +148,7 @@ graylog-cli search <QUERY> [--time-range 15m] [--since 1h] [--field message] [--
 | `--all-pages`      | flag (no value)              | Fetch all results beyond the 500-per-page API limit. See caveat below                                                                                 |
 | `--format`         | `json` (default), `table`    | Output format. `table` renders an ASCII table of messages directly to stdout                                                                          |
 
-When `--group-by` is set, the output includes a `groups` array where each group has `key` (field value), `count` (number of messages), and `duration_ms` (time span from first to last message in the group). Use `--sort-direction asc` with `--group-by` for chronological grouping. The `--group-by` field is automatically added to the fetched fields, so you do not need to specify it explicitly with `--field`.
+When `--group-by` is set, the output includes a `groups` array where each group has `key` (field value), `count` (number of messages), and `duration_ms` (time span from first to last message in the group). `key` is the field's string value: numeric fields such as `level`, and messages without the field, all land in one `unknown` group, so group on string fields like `correlationId` or `facility`. `duration_ms` is only present when `timestamp` is among the fetched fields. Use `--sort-direction asc` with `--group-by` for chronological grouping. The `--group-by` field is automatically added to the fetched fields, so you do not need to specify it explicitly with `--field`.
 
 When `--all-pages` is set, the CLI automatically paginates through all results. Useful for queries that match more than 500 events. **Caveat:** pagination stops at 10,000 messages. When this limit is reached, a warning is printed to stderr and `metadata.truncated` is set to `true` in the JSON output. If you need more than 10,000 messages, narrow your query or time range.
 
@@ -184,15 +186,17 @@ graylog-cli aggregate <QUERY> --aggregation-type <TYPE> --field <FIELD> \
   [--size 10] [--interval 1h] [--time-range 1d] [--since 1h] [--format json|table]
 ```
 
-| `--aggregation-type`       | Notes                      |
-| -------------------------- | -------------------------- |
-| `terms`                    | Top values for a field     |
-| `date_histogram`           | Requires `--interval`      |
-| `cardinality`              | Distinct count             |
-| `stats`                    | Stats over a numeric field |
-| `min`, `max`, `avg`, `sum` | Single-metric aggregations |
+| `--aggregation-type`       | Notes                                                  |
+| -------------------------- | ------------------------------------------------------ |
+| `terms`                    | Top values for a field                                 |
+| `date_histogram`           | Requires `--interval`                                  |
+| `cardinality`              | Distinct count                                         |
+| `stats`                    | Stats over a numeric field. Currently fails, see below |
+| `min`, `max`, `avg`, `sum` | Single-metric aggregations. Currently fail, see below  |
 
 `--size` accepts 1-100. `--interval` is required for `date_histogram` and forbidden for all other types.
+
+`stats`, `min`, `max`, `avg` and `sum` fail against `graylog.norce.tech` with `unsupported_endpoint` (exit 4), including on numeric fields such as `Elapsed` (verified 2026-09-25). The CLI reports every failed aggregation as `unsupported_endpoint`, so the code does not tell you the cause. Use `terms`, `date_histogram` and `cardinality`. Output shapes are under [Interpreting Output](#interpreting-output).
 
 ### count-by-level
 
@@ -426,9 +430,13 @@ All runtime output is JSON. Key fields:
   "query": "checkout AND level:<=3",
   "returned": 42,
   "messages": [...],
-  "metadata": { "total_results": 420 }
+  "metadata": {
+    "effective_timerange": { "from": "2026-09-25T14:21:39.524Z", "to": "2026-09-25T14:26:39.524Z", "type": "absolute" }
+  }
 }
 ```
+
+There is no total hit count. `returned` is the number of messages in this response; `--all-pages` fetches them all, up to the 10,000 cap flagged by `metadata.truncated`. `effective_timerange` is the absolute window the query ran over, which is useful for checking what a relative `--time-range` resolved to.
 
 **Search with `--group-by`** — adds `grouped_by` and `groups` with counts and durations:
 
@@ -444,7 +452,7 @@ All runtime output is JSON. Key fields:
     { "key": "abc-123", "count": 15, "duration_ms": 3400 },
     { "key": "def-456", "count": 2027, "duration_ms": 1200 }
   ],
-  "metadata": { "total_results": 2042 }
+  "metadata": { "effective_timerange": { "from": "…", "to": "…", "type": "absolute" } }
 }
 ```
 
@@ -458,11 +466,29 @@ Each group's `duration_ms` is the time span from the first to last message in th
   "command": "aggregate",
   "aggregation_type": "terms",
   "rows": [
-    { "source": "api-gateway", "count()": 150 },
-    { "source": "payment-service", "count()": 23 }
+    { "grouping: facility": "checkout-order", "metric: count()": 1609 },
+    { "grouping: facility": "checkout-norce-adapter", "metric: count()": 618 }
   ],
-  "metadata": {}
+  "metadata": {
+    "effective_timerange": { "from": "…", "to": "…", "type": "absolute" }
+  }
 }
+```
+
+Row keys are `"grouping: <field>"` and `"metric: <series>"`:
+
+| Command                                              | Row shape                                                                         |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `aggregate --aggregation-type terms --field F`       | `{"grouping: F": "<value>", "metric: count()": N}`                                |
+| `aggregate --aggregation-type date_histogram`        | `{"grouping: timestamp": "2026-09-25T14:10:00Z", "metric: count()": N}`           |
+| `aggregate --aggregation-type cardinality --field F` | `{"metric: card(F)": N}` (a single row, no grouping key)                          |
+| `count-by-level`                                     | `{"grouping: level": "6", "metric: count()": N}`; `aggregation_type` is `"terms"` |
+
+Grouping values are strings even for numeric fields (`"6"` for level 6). The keys contain `: ` and parentheses, so read them in jq with bracket syntax:
+
+```bash
+graylog-cli aggregate 'facility:"checkout-order" AND level:<=3' --aggregation-type terms --field merchant --time-range 1d \
+  | jq -r '.rows[] | "\(.["grouping: merchant"])\t\(.["metric: count()"])"'
 ```
 
 **Error responses** — always include `ok: false`, `code`, and `message`:
@@ -509,7 +535,7 @@ Graylog is unreachable. Check the URL, network connectivity, and any proxy setti
 
 **Empty results from search or aggregate**
 
-The timerange may not cover the period you expect. Try a wider range with `--time-range 1d`. Verify the query syntax — remember that `level` is numeric (0–7), not text.
+First check the instance: `graylog-cli ping | jq .graylog_url` must be the Graylog for the system you are investigating (see [Profiles](#profiles-multiple-graylog-instances)); switch with `--profile <name>` if not. The timerange may not cover the period you expect. Try a wider range with `--time-range 1d`. Verify the query syntax — remember that `level` is numeric (0–7), not text.
 
 **"interval is only supported when aggregation-type date_histogram is selected"**
 
